@@ -1,0 +1,369 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Temporary Pretriage demo host and private clinical-file bucket — uses an existing
+  public subnet, a fixed Elastic IP, Cloudflare-proxied TLS, and SSM access without a NAT gateway,
+  load balancer, or SSH access.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: Existing public VPC subnet -> single EC2 Docker host + private versioned S3; frontend remains on Amplify.
+    must:
+      - Use only the confirmed project Region; this template follows AWS::Region.
+      - Proxy the API hostname through Cloudflare and configure Caddy with an Origin CA cert in Full (strict) mode.
+      - Keep Cloudflare IPv4 ranges current in CloudflareIpv4PrefixList; no SSH, HTTP, or database ports are exposed.
+      - Stop the instance when idle; the fixed Elastic IP remains allocated and incurs its hourly public IPv4 charge while stopped.
+      - Deleting the stack releases the Elastic IP; the clinical S3 bucket and root EBS volume remain retained.
+      - The root EBS volume and S3 bucket retain data after stack deletion; manage and clean them deliberately.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC that contains the selected public subnet.
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing public subnet with a route to an Internet Gateway.
+  InstanceType:
+    Type: String
+    Default: t3a.medium
+    AllowedValues:
+      - t3a.medium
+      - t3.medium
+    Description: 2 vCPU and 4 GiB demo host; T3 standard credit mode avoids unlimited surplus-credit charges.
+  LatestAmazonLinux2023Ami:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Latest Amazon Linux 2023 x86_64 AMI from the public SSM parameter.
+
+Resources:
+  ClinicalFilesBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Private durable clinical object store; the application writes UUID.ext keys at the bucket root, versioning supports recovery, and incomplete uploads expire after a week.
+        must:
+          - Keep all four public access blocks, bucket-owner-enforced ownership, default encryption, versioning, and TLS-only access.
+          - Grant the EC2 role object access only in this dedicated bucket.
+        mutable: change-with-constraints
+        mutability:
+          BucketName: must-never-change
+          VersioningConfiguration: review-required
+    Properties:
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  ClinicalFilesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Enforces HTTPS for all access, including future principals.
+        must:
+          - Retain the aws:SecureTransport deny for every bucket object and bucket operation.
+    Properties:
+      Bucket: !Ref ClinicalFilesBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt ClinicalFilesBucket.Arn
+              - !Sub '${ClinicalFilesBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  BackendImageRepository:
+    Type: AWS::ECR::Repository
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Holds prebuilt x86_64 backend images so application builds do not consume credits on the demo host.
+        must:
+          - Keep only the three most recent images and enable scan-on-push.
+        mutable: change-with-constraints
+        mutability:
+          RepositoryName: must-never-change
+    Properties:
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: MUTABLE
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the three most recent images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 3
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  CloudflareIpv4PrefixList:
+    Type: AWS::EC2::PrefixList
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Mirrors Cloudflare's published IPv4 ranges so the origin accepts HTTPS only from Cloudflare's proxy edge.
+        must:
+          - Review entries against https://www.cloudflare.com/ips-v4 before each deployment and keep MaxEntries synchronized.
+          - Proxy api.pretriage.com.ar through Cloudflare and use an Origin CA certificate with Full (strict) TLS.
+        mutable: review-required
+    Properties:
+      AddressFamily: IPv4
+      MaxEntries: 15
+      PrefixListName: !Sub '${AWS::StackName}-cloudflare-ipv4'
+      Entries:
+        - Cidr: 173.245.48.0/20
+          Description: Cloudflare IPv4
+        - Cidr: 103.21.244.0/22
+          Description: Cloudflare IPv4
+        - Cidr: 103.22.200.0/22
+          Description: Cloudflare IPv4
+        - Cidr: 103.31.4.0/22
+          Description: Cloudflare IPv4
+        - Cidr: 141.101.64.0/18
+          Description: Cloudflare IPv4
+        - Cidr: 108.162.192.0/18
+          Description: Cloudflare IPv4
+        - Cidr: 190.93.240.0/20
+          Description: Cloudflare IPv4
+        - Cidr: 188.114.96.0/20
+          Description: Cloudflare IPv4
+        - Cidr: 197.234.240.0/22
+          Description: Cloudflare IPv4
+        - Cidr: 198.41.128.0/17
+          Description: Cloudflare IPv4
+        - Cidr: 162.158.0.0/15
+          Description: Cloudflare IPv4
+        - Cidr: 104.16.0.0/13
+          Description: Cloudflare IPv4
+        - Cidr: 104.24.0.0/14
+          Description: Cloudflare IPv4
+        - Cidr: 172.64.0.0/13
+          Description: Cloudflare IPv4
+        - Cidr: 131.0.72.0/22
+          Description: Cloudflare IPv4
+
+  DemoElasticIp:
+    Type: AWS::EC2::EIP
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Provides a stable API origin address across EC2 stop/start cycles; allocation incurs the accepted hourly public IPv4 charge while the instance is stopped.
+        must:
+          - Associate only with DemoInstance and retain the allocation until the demo stack is deliberately deleted.
+          - Point the Cloudflare proxied API hostname at this stable address.
+        mutable: change-with-constraints
+        mutability:
+          Domain: must-remain-vpc
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-api-origin'
+
+  DemoInstanceRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allows SSM shell access, S3 clinical-file operations in the dedicated bucket, and pulls from this stack's ECR repository.
+        must:
+          - Do not attach broad S3 or ECR policies; ECR authorization token is the only resource-wildcard permission.
+          - Keep SSM for administration and do not add an SSH key or port 22 ingress.
+        mutable: change-with-constraints
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
+      Policies:
+        - PolicyName: DemoRuntimeAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ClinicalFileObjectOperations
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub '${ClinicalFilesBucket.Arn}/*'
+              - Sid: EcrAuthorizationToken
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: PullBackendImage
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !GetAtt BackendImageRepository.Arn
+
+  DemoInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Supplies the least-privilege runtime role to the demo EC2 host.
+        must:
+          - Attach only DemoInstanceRole to this profile.
+    Properties:
+      Roles:
+        - !Ref DemoInstanceRole
+
+  DemoSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Restricts origin HTTPS to Cloudflare proxy ranges; management uses SSM.
+        must:
+          - Allow only HTTPS from CloudflareIpv4PrefixList; do not add SSH, HTTP, database, or application-container ports.
+          - Keep CloudflareIpv4PrefixList synchronized with Cloudflare's published IPv4 list.
+        mutable: change-with-constraints
+        mutability:
+          SecurityGroupIngress: review-required
+    Properties:
+      GroupDescription: Pretriage demo web ingress; SSM is used for host management.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: HTTPS from Cloudflare proxy edge only
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourcePrefixListId: !Ref CloudflareIpv4PrefixList
+      SecurityGroupEgress:
+        - Description: Outbound package, ECR, SSM, and application traffic through the existing subnet route
+          IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  DemoInstance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: On-demand Docker host in an existing public subnet; no NAT gateway, load balancer, or SSH exposure. A fixed Elastic IP keeps the API address stable across stop/start and continues to incur an hourly address charge while stopped.
+        must:
+          - Use IMDSv2 and a hop limit of 2 so Docker SDK clients can obtain the narrowly scoped instance role credentials.
+          - Keep the 24 GiB encrypted gp3 root volume after instance termination; back up PostgreSQL separately before destructive host operations.
+          - Stop the host when idle; DemoElasticIp remains associated across stop/start and incurs its hourly public IPv4 charge while stopped.
+          - Do not publish PostgreSQL or application container ports; expose only the HTTPS reverse proxy through Cloudflare.
+        mutable: change-with-constraints
+        mutability:
+          ImageId: review-required
+          InstanceType: review-required
+          BlockDeviceMappings: review-required
+    Properties:
+      ImageId: !Ref LatestAmazonLinux2023Ami
+      InstanceType: !Ref InstanceType
+      CreditSpecification:
+        CPUCredits: standard
+      IamInstanceProfile: !Ref DemoInstanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: '0'
+          GroupSet:
+            - !GetAtt DemoSecurityGroup.GroupId
+          SubnetId: !Ref PublicSubnetId
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 2
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            DeleteOnTermination: false
+            Encrypted: true
+            VolumeSize: 24
+            VolumeType: gp3
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -euo pipefail
+          # AL2023 ships curl-minimal, which supports the HTTPS download below.
+          dnf install -y docker curl-minimal
+          systemctl enable --now docker
+          compose_version='5.6.1'
+          compose_sha256='47737f4236e6d3ccea7291995203f8f018058783b4c3a9469119811a0b5db8c0'
+          tmp_file="$(mktemp)"
+          trap 'rm -f "$tmp_file"' EXIT
+          curl --fail --location --silent --show-error \
+            "https://github.com/docker/compose/releases/download/v$compose_version/docker-compose-linux-x86_64" \
+            --output "$tmp_file"
+          echo "$compose_sha256  $tmp_file" | sha256sum --check --status
+          install -D -o root -g root -m 0755 "$tmp_file" /usr/local/lib/docker/cli-plugins/docker-compose
+          install -d -o root -g root -m 0700 /opt/pretriage
+          install -d -o root -g root -m 0700 /opt/pretriage/data
+          install -d -o 999 -g 999 -m 0700 /opt/pretriage/data/postgres
+          install -d -o root -g root -m 0700 /opt/pretriage/certs
+          docker compose version
+
+  DemoElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Binds the stable API origin address to the EC2 instance's primary network interface.
+        must:
+          - Associate DemoElasticIp with DemoInstance and do not introduce a second ENI or change its networking during updates.
+        mutable: change-with-constraints
+    Properties:
+      AllocationId: !GetAtt DemoElasticIp.AllocationId
+      InstanceId: !Ref DemoInstance
+
+Outputs:
+  InstanceId:
+    Description: EC2 instance ID for start/stop operations and SSM sessions.
+    Value: !Ref DemoInstance
+  InstancePublicIp:
+    Description: Fixed Elastic IPv4 for the API origin; remains stable after stop/start and is billed hourly while allocated.
+    Value: !Ref DemoElasticIp
+  ElasticIpAllocationId:
+    Description: Allocation ID for the fixed API origin Elastic IP; deleting this stack releases the address.
+    Value: !GetAtt DemoElasticIp.AllocationId
+  InstancePublicDnsName:
+    Description: EC2 public DNS name associated with the instance; use InstancePublicIp for the stable Cloudflare origin address.
+    Value: !GetAtt DemoInstance.PublicDnsName
+  SsmStartSessionCommand:
+    Description: Run locally after AWS CLI authentication and Session Manager plugin setup.
+    Value: !Sub 'aws ssm start-session --target ${DemoInstance} --region ${AWS::Region}'
+  ClinicalFilesBucketName:
+    Description: Private S3 bucket; the application writes UUID.ext objects at the bucket root.
+    Value: !Ref ClinicalFilesBucket
+  BackendImageRepositoryUri:
+    Description: ECR URI for publishing x86_64 backend images from a build workstation or CI.
+    Value: !GetAtt BackendImageRepository.RepositoryUri
+  BackendImageRepositoryName:
+    Description: ECR repository name.
+    Value: !Ref BackendImageRepository

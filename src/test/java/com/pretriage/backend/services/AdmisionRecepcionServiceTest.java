@@ -1,0 +1,285 @@
+package com.pretriage.backend.services;
+
+import com.pretriage.backend.controllers.dtos.FormularioTriageRecepcionRequest;
+import com.pretriage.backend.controllers.dtos.DolorReportadoRequest;
+import com.pretriage.backend.controllers.dtos.TriageResultDTO;
+import com.pretriage.backend.controllers.dtos.TiempoEstimadoAtencionResponse;
+import com.pretriage.backend.model.consultas.*;
+import com.pretriage.backend.model.hospitales.*;
+import com.pretriage.backend.model.personas.*;
+import com.pretriage.backend.model.recepcion.*;
+import com.pretriage.backend.repositories.*;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import tools.jackson.databind.ObjectMapper;
+
+import java.util.List;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class AdmisionRecepcionServiceTest {
+    @Mock RepoRecepcionistas repoRecepcionistas; @Mock RepoHospitales repoHospitales;
+    @Mock RepoSesionesRecepcion repoSesionesRecepcion; @Mock RepoAdmisionesRecepcion repoAdmisionesRecepcion;
+    @Mock RepoPacientes repoPacientes; @Mock RepoConsultasMedicas repoConsultasMedicas;
+    @Mock RepoDirecciones repoDirecciones;
+    @Mock RepoEspecialidadesMedicas repoEspecialidadesMedicas; @Mock TriageFormularioService triageFormularioService;
+    @Mock IngresoColaService ingresoColaService; @Mock EstimacionAtencionService estimacionAtencionService;
+    @Mock AsignacionSectorService asignacionSectorService;
+    @Mock ObjectMapper objectMapper;
+    @InjectMocks AdmisionRecepcionService service;
+
+    @Test
+    void informaAtencionEnCursoAlBuscarPaciente() {
+        Hospital hospital = new Hospital(); hospital.setId(3L);
+        SesionRecepcion sesion = new SesionRecepcion(); sesion.setId(6L);
+        sesion.setHospital(hospital); sesion.setEstado(EstadoSesionRecepcion.ACTIVA);
+        Paciente paciente = new Paciente(); paciente.setId(2L); paciente.setNumeroDocumento("30111222");
+        paciente.setNombre("Ana"); paciente.setApellido("Perez");
+        ConsultaMedica consulta = new ConsultaMedica(); consulta.setEstadoConsulta(EstadoConsulta.EN_COLA);
+        when(repoSesionesRecepcion.findByIdAndRecepcionistaUsuarioAuthId(6L, "auth"))
+                .thenReturn(Optional.of(sesion));
+        when(repoPacientes.findByNumeroDocumentoOrUsuarioAuthNumeroDocumento("30111222", "30111222"))
+                .thenReturn(Optional.of(paciente));
+        when(repoConsultasMedicas.findFirstByPacienteIdAndEstadoConsultaIn(eq(2L), anyCollection()))
+                .thenReturn(Optional.of(consulta));
+
+        var resultado = service.buscarPaciente("auth", 6L, "30111222");
+
+        assertTrue(resultado.atencionEnCurso());
+        assertEquals(EstadoConsulta.EN_COLA, resultado.estadoAtencionEnCurso());
+    }
+
+    @Test
+    void noPermiteDosSesionesActivas() {
+        Recepcionista recepcionista = new Recepcionista(); recepcionista.setId(1L);
+        when(repoRecepcionistas.findRecepcionistaByUsuarioAuthId("auth")).thenReturn(Optional.of(recepcionista));
+        when(repoSesionesRecepcion.existsByRecepcionistaIdAndEstado(1L, EstadoSesionRecepcion.ACTIVA)).thenReturn(true);
+        assertThrows(com.pretriage.backend.exceptions.ConflictoDeEstadoException.class,
+                () -> service.iniciarSesion("auth", 10L));
+    }
+
+    @Test
+    void finalizaFormularioEIngresaLaMismaConsultaALaCola() throws Exception {
+        Paciente paciente = new Paciente(); paciente.setId(2L);
+        Hospital hospital = new Hospital(); hospital.setId(3L);
+        EspecialidadMedica especialidad = new EspecialidadMedica(); especialidad.setId(4L);
+        Sector sector = new Sector(); sector.setId(10L); sector.setNombre("Pediatria");
+        ConsultaMedica consulta = new ConsultaMedica(); consulta.setId(5L); consulta.setPaciente(paciente);
+        consulta.setHospital(hospital); consulta.setEspecialidad(especialidad); consulta.setSector(sector);
+        consulta.setCodigoLlamado("R-ABC123");
+        Recepcionista recepcionista = new Recepcionista(); recepcionista.setId(1L);
+        SesionRecepcion sesion = new SesionRecepcion(); sesion.setId(6L); sesion.setRecepcionista(recepcionista);
+        sesion.setHospital(hospital); sesion.setEstado(EstadoSesionRecepcion.ACTIVA);
+        AdmisionRecepcion admision = new AdmisionRecepcion(); admision.setId(7L); admision.setConsultaMedica(consulta);
+        admision.setSesionRecepcion(sesion); admision.setEstado(EstadoAdmisionRecepcion.INICIADA);
+        FormularioTriageRecepcionRequest formulario = new FormularioTriageRecepcionRequest(
+                "dolor abdominal", List.of(), "hace dos horas", "empeora",
+                List.of(new DolorReportadoRequest("abdomen", 7)), false,
+                List.of(), List.of(), List.of(), List.of(), "no aplica", "");
+        TriageResultDTO resultado = new TriageResultDTO("dolor abdominal", List.of("dolor"), "dos horas",
+                "empeora", 7, List.of(), List.of(), List.of(), List.of(), "no aplica", "", 3, false, "evaluar");
+        when(repoAdmisionesRecepcion.findByIdAndSesionRecepcionRecepcionistaUsuarioAuthId(7L, "auth"))
+                .thenReturn(Optional.of(admision));
+        when(repoAdmisionesRecepcion.existsById(7L)).thenReturn(true);
+        when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+        when(triageFormularioService.clasificar(formulario)).thenReturn(resultado);
+        when(ingresoColaService.ingresar(consulta, NivelDeGravedad.URGENTE)).thenAnswer(inv -> {
+            consulta.setNivelDeGravedadBot(NivelDeGravedad.URGENTE); consulta.setEstadoConsulta(EstadoConsulta.EN_COLA);
+            return new TiempoEstimadoAtencionResponse();
+        });
+
+        var dto = service.finalizar("auth", 7L, formulario);
+
+        assertEquals(EstadoAdmisionRecepcion.FINALIZADA, admision.getEstado());
+        assertEquals(NivelDeGravedad.URGENTE, dto.prioridad());
+        assertEquals(10L, dto.sectorId());
+        assertEquals("Pediatria", dto.nombreSector());
+        verify(ingresoColaService).ingresar(consulta, NivelDeGravedad.URGENTE);
+    }
+
+    @Test
+    void falloGeminiEnRecepcionConservaFallbackYFinalizaLaAdmision() throws Exception {
+        Paciente paciente = new Paciente(); paciente.setId(2L);
+        Hospital hospital = new Hospital(); hospital.setId(3L);
+        EspecialidadMedica especialidad = new EspecialidadMedica(); especialidad.setId(4L);
+        Sector sector = new Sector(); sector.setId(10L); sector.setNombre("Pediatria");
+        ConsultaMedica consulta = new ConsultaMedica(); consulta.setId(5L); consulta.setPaciente(paciente);
+        consulta.setHospital(hospital); consulta.setEspecialidad(especialidad); consulta.setSector(sector);
+        consulta.setCodigoLlamado("R-ABC123");
+        Recepcionista recepcionista = new Recepcionista(); recepcionista.setId(1L);
+        SesionRecepcion sesion = new SesionRecepcion(); sesion.setId(6L); sesion.setRecepcionista(recepcionista);
+        sesion.setHospital(hospital); sesion.setEstado(EstadoSesionRecepcion.ACTIVA);
+        AdmisionRecepcion admision = new AdmisionRecepcion(); admision.setId(7L); admision.setConsultaMedica(consulta);
+        admision.setSesionRecepcion(sesion); admision.setEstado(EstadoAdmisionRecepcion.INICIADA);
+        FormularioTriageRecepcionRequest formulario = new FormularioTriageRecepcionRequest(
+                "dolor abdominal", List.of(), "hace dos horas", "empeora",
+                List.of(new DolorReportadoRequest("abdomen", 7)), false,
+                List.of(), List.of(), List.of(), List.of(), "no aplica", "");
+        TriageResultDTO resultado = new TriageResultDTO("dolor abdominal", List.of("dolor"), "dos horas",
+                "empeora", 7, List.of(), List.of(), List.of(), List.of(), "no aplica", "", 3, false, "evaluar");
+        when(repoAdmisionesRecepcion.findByIdAndSesionRecepcionRecepcionistaUsuarioAuthId(7L, "auth"))
+                .thenReturn(Optional.of(admision));
+        when(repoAdmisionesRecepcion.existsById(7L)).thenReturn(true);
+        when(objectMapper.writeValueAsString(any())).thenReturn("{}");
+        when(triageFormularioService.clasificar(formulario))
+                .thenThrow(new com.pretriage.backend.exceptions.ProveedorIaException(null));
+        when(triageFormularioService.resultadoFallback(formulario)).thenReturn(resultado);
+        when(ingresoColaService.ingresar(consulta, NivelDeGravedad.URGENTE)).thenAnswer(inv -> {
+            consulta.setNivelDeGravedadBot(NivelDeGravedad.URGENTE); consulta.setEstadoConsulta(EstadoConsulta.EN_COLA);
+            return new TiempoEstimadoAtencionResponse();
+        });
+
+        var dto = service.finalizar("auth", 7L, formulario);
+
+        assertEquals(EstadoAdmisionRecepcion.FINALIZADA, admision.getEstado());
+        assertEquals(NivelDeGravedad.URGENTE, dto.prioridad());
+        assertEquals(10L, dto.sectorId());
+        assertEquals("Pediatria", dto.nombreSector());
+        verify(triageFormularioService).resultadoFallback(formulario);
+        verify(ingresoColaService).ingresar(consulta, NivelDeGravedad.URGENTE);
+    }
+
+    @Test
+    void cancelaAdmisionYConsultaSinIngresarALaCola() {
+        AdmisionRecepcion admision = admisionAbierta();
+        when(repoAdmisionesRecepcion.existsById(7L)).thenReturn(true);
+        when(repoAdmisionesRecepcion.findByIdAndSesionRecepcionRecepcionistaUsuarioAuthId(7L, "auth"))
+                .thenReturn(Optional.of(admision));
+        when(repoSesionesRecepcion.findByIdAndRecepcionistaUsuarioAuthId(6L, "auth"))
+                .thenReturn(Optional.of(admision.getSesionRecepcion()));
+
+        var resultado = service.cancelar("auth", 7L);
+
+        assertEquals(EstadoAdmisionRecepcion.CANCELADA, resultado.estado());
+        assertEquals(EstadoConsulta.CANCELADA, admision.getConsultaMedica().getEstadoConsulta());
+        assertNotNull(admision.getFechaHoraCancelacion());
+        verify(repoConsultasMedicas).save(admision.getConsultaMedica());
+        verify(repoAdmisionesRecepcion).save(admision);
+        verifyNoInteractions(ingresoColaService);
+    }
+
+    @Test
+    void noCancelaAdmisionFinalizada() {
+        AdmisionRecepcion admision = admisionAbierta();
+        admision.setEstado(EstadoAdmisionRecepcion.FINALIZADA);
+        when(repoAdmisionesRecepcion.existsById(7L)).thenReturn(true);
+        when(repoAdmisionesRecepcion.findByIdAndSesionRecepcionRecepcionistaUsuarioAuthId(7L, "auth"))
+                .thenReturn(Optional.of(admision));
+        when(repoSesionesRecepcion.findByIdAndRecepcionistaUsuarioAuthId(6L, "auth"))
+                .thenReturn(Optional.of(admision.getSesionRecepcion()));
+
+        assertThrows(com.pretriage.backend.exceptions.ConflictoDeEstadoException.class,
+                () -> service.cancelar("auth", 7L));
+    }
+
+    @Test
+    void listaAdmisionesAbiertasEnOrdenDelRepositorio() {
+        AdmisionRecepcion admision = admisionAbierta();
+        when(repoSesionesRecepcion.findByIdAndRecepcionistaUsuarioAuthId(6L, "auth"))
+                .thenReturn(Optional.of(admision.getSesionRecepcion()));
+        when(repoAdmisionesRecepcion.findBySesionRecepcionIdAndEstadoInOrderByFechaHoraInicioAsc(
+                eq(6L), anyCollection())).thenReturn(List.of(admision));
+
+        var resultado = service.listarAbiertas("auth", 6L);
+
+        assertEquals(1, resultado.size());
+        assertEquals(7L, resultado.getFirst().id());
+        assertNull(resultado.getFirst().estimacion());
+    }
+
+    @Test
+    void recuperaDetalleFinalizadoConEstimacionDinamica() {
+        AdmisionRecepcion admision = admisionAbierta();
+        admision.setEstado(EstadoAdmisionRecepcion.FINALIZADA);
+        admision.getConsultaMedica().setEstadoConsulta(EstadoConsulta.EN_COLA);
+        TiempoEstimadoAtencionResponse estimacion = new TiempoEstimadoAtencionResponse();
+        when(repoAdmisionesRecepcion.existsById(7L)).thenReturn(true);
+        when(repoAdmisionesRecepcion.findByIdAndSesionRecepcionRecepcionistaUsuarioAuthId(7L, "auth"))
+                .thenReturn(Optional.of(admision));
+        when(estimacionAtencionService.calcularPara(admision.getConsultaMedica())).thenReturn(estimacion);
+
+        var resultado = service.obtenerDetalle("auth", 7L);
+
+        assertSame(estimacion, resultado.estimacion());
+    }
+
+    @Test
+    void registraDatosPersonalesSinCorreoNiCodigoPostalDelPacientePresencial() {
+        Hospital hospital = new Hospital(); hospital.setId(3L); hospital.setNombre("Hospital");
+        EspecialidadMedica especialidad = new EspecialidadMedica();
+        especialidad.setId(4L); especialidad.setCodigo("CLINICA_MEDICA");
+        hospital.setEspecialidades(List.of(especialidad));
+        SesionRecepcion sesion = new SesionRecepcion(); sesion.setId(6L);
+        sesion.setHospital(hospital); sesion.setEstado(EstadoSesionRecepcion.ACTIVA);
+        var request = new com.pretriage.backend.controllers.dtos.CrearAdmisionRecepcionRequest(
+                6L, "30111222", "Ana", "Perez", java.time.LocalDate.of(1990, 5, 10),
+                Genero.FEMENINO, "+54 11 5555-0101", "", "Calle E2E", "1234", "2",
+                "Ciudad Autonoma de Buenos Aires", "Buenos Aires", null, "CLINICA_MEDICA");
+        when(repoSesionesRecepcion.findByIdAndRecepcionistaUsuarioAuthId(6L, "auth"))
+                .thenReturn(Optional.of(sesion));
+        when(repoPacientes.findByNumeroDocumentoOrUsuarioAuthNumeroDocumento("30111222", "30111222"))
+                .thenReturn(Optional.empty());
+        when(repoDirecciones.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(repoPacientes.save(any())).thenAnswer(inv -> {
+            Paciente paciente = inv.getArgument(0); paciente.setId(2L); return paciente;
+        });
+        when(repoConsultasMedicas.findFirstByPacienteIdAndEstadoConsultaIn(eq(2L), anyCollection()))
+                .thenReturn(Optional.empty());
+        when(repoEspecialidadesMedicas.findByCodigo("CLINICA_MEDICA")).thenReturn(Optional.of(especialidad));
+        when(repoConsultasMedicas.save(any())).thenAnswer(inv -> {
+            ConsultaMedica consulta = inv.getArgument(0); consulta.setId(5L); return consulta;
+        });
+        when(asignacionSectorService.asignarSector(any(ConsultaMedica.class))).thenAnswer(inv -> {
+            ConsultaMedica consulta = inv.getArgument(0);
+            Sector sector = new Sector(); sector.setId(50L); sector.setNombre("Sector A");
+            consulta.setSector(sector);
+            return sector;
+        });
+        when(repoAdmisionesRecepcion.save(any())).thenAnswer(inv -> {
+            AdmisionRecepcion admision = inv.getArgument(0); admision.setId(7L); return admision;
+        });
+
+        service.crearAdmision("auth", request);
+
+        var consultaCaptor = org.mockito.ArgumentCaptor.forClass(ConsultaMedica.class);
+        verify(repoConsultasMedicas).save(consultaCaptor.capture());
+        assertEquals("Sector A", consultaCaptor.getValue().getSector().getNombre());
+        verify(asignacionSectorService).asignarSector(consultaCaptor.getValue());
+
+        var pacienteCaptor = org.mockito.ArgumentCaptor.forClass(Paciente.class);
+        verify(repoPacientes).save(pacienteCaptor.capture());
+        Paciente paciente = pacienteCaptor.getValue();
+        assertEquals("+54 11 5555-0101", paciente.getTelefono());
+        assertNull(paciente.getCorreoElectronico());
+        assertEquals("Calle E2E", paciente.getDireccion().getCalle());
+        assertEquals("1234", paciente.getDireccion().getAltura());
+        assertEquals("Ciudad Autonoma de Buenos Aires", paciente.getDireccion().getCiudad());
+        assertEquals("Buenos Aires", paciente.getDireccion().getProvincia());
+        assertNull(paciente.getDireccion().getCodigoPostal());
+    }
+
+    private AdmisionRecepcion admisionAbierta() {
+        Paciente paciente = new Paciente();
+        paciente.setId(2L); paciente.setNumeroDocumento("30111222");
+        paciente.setNombre("Ana"); paciente.setApellido("Perez");
+        Hospital hospital = new Hospital(); hospital.setId(3L); hospital.setNombre("Hospital");
+        EspecialidadMedica especialidad = new EspecialidadMedica();
+        especialidad.setId(4L); especialidad.setCodigo("CLINICA_MEDICA"); especialidad.setNombre("Clinica");
+        ConsultaMedica consulta = new ConsultaMedica(); consulta.setId(5L); consulta.setPaciente(paciente);
+        consulta.setHospital(hospital); consulta.setEspecialidad(especialidad); consulta.setCodigoLlamado("R-ABC123");
+        consulta.setEstadoConsulta(EstadoConsulta.PRETRIAGE_EN_PROCESO);
+        SesionRecepcion sesion = new SesionRecepcion(); sesion.setId(6L); sesion.setHospital(hospital);
+        sesion.setEstado(EstadoSesionRecepcion.ACTIVA);
+        AdmisionRecepcion admision = new AdmisionRecepcion(); admision.setId(7L);
+        admision.setConsultaMedica(consulta); admision.setSesionRecepcion(sesion);
+        admision.setEstado(EstadoAdmisionRecepcion.INICIADA);
+        return admision;
+    }
+}

@@ -1,0 +1,76 @@
+# Separate from the developer compose.yaml; always pass -f compose.aws.yaml.
+name: pretriage-demo
+x-logging: &bounded-logs
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pretriage_demo}
+      POSTGRES_USER: ${POSTGRES_USER:-pretriage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a new demo database password}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    stop_grace_period: 60s
+    mem_limit: 768m
+    cpus: 0.5
+    logging: *bounded-logs
+
+  backend:
+    image: ${BACKEND_IMAGE:?Set the ECR image URI and immutable tag or digest}
+    restart: unless-stopped
+    env_file:
+      - .env.aws
+    environment:
+      SPRING_PROFILES_ACTIVE: aws
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-pretriage_demo}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-pretriage}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set a new demo database password}
+      JPA_DDL_AUTO: update
+      SPRING_DOCKER_COMPOSE_ENABLED: 'false'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No host port: Caddy is the only public entry point.
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 45s
+    mem_limit: 2g
+    cpus: 1.75
+    logging: *bounded-logs
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-api.pretriage.com.ar}
+    ports:
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/etc/caddy/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 128m
+    cpus: 0.25
+    logging: *bounded-logs
+
+volumes:
+  caddy_data:
+  caddy_config:

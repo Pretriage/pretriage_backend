@@ -1,0 +1,5 @@
+﻿# Un mensaje por linea. Las lineas vacias y comentarios se ignoran.
+Tengo fiebre y dolor de garganta desde ayer.
+La fiebre llego a 38.5 y el dolor es 5 de 10.
+No tengo dificultad para respirar ni dolor de pecho.
+No tengo enfermedades previas, no tomo medicacion y no tengo alergias.

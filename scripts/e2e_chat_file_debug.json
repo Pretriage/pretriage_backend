@@ -1,0 +1,37 @@
+{
+  "chatId": 5,
+  "usuario": "fc***@frba.utn.edu.ar",
+  "hospitalPlaceId": "e2e-hospital-chat",
+  "especialidad": "CLINICA_MEDICA",
+  "turnosScript": [
+    {
+      "turno": 1,
+      "paciente": "﻿# Un mensaje por linea. Las lineas vacias y comentarios se ignoran.",
+      "bot": "¿Cuáles son tus síntomas principales?",
+      "atencionEstimada": null
+    },
+    {
+      "turno": 2,
+      "paciente": "Tengo fiebre y dolor de garganta desde ayer.",
+      "bot": "Necesito precisar el dolor: del 0 al 10, cuanto te duele ahora y en que zona lo sentis?",
+      "atencionEstimada": null
+    },
+    {
+      "turno": 3,
+      "paciente": "La fiebre llego a 38.5 y el dolor es 5 de 10.",
+      "bot": "¿Cuál es la causa de tu dolor de garganta?",
+      "atencionEstimada": null
+    },
+    {
+      "turno": 4,
+      "paciente": "No tengo dificultad para respirar ni dolor de pecho.",
+      "bot": "Gracias. Ya registre tus respuestas.",
+      "atencionEstimada": {
+        "fechaHoraAtencionEstimada": "2026-07-09T22:53:16.719594"
+      }
+    }
+  ],
+  "resultadoTriageSql": "resultado_triage_json                                                                                                                                                                                                                                                                                                             \n-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n {\"motivoConsulta\":\"ï»¿# Un mensaje por linea. Las lineas vacias y comentarios se ignoran.\",\"sintomas\":[\"fiebre\"],\"inicio\":\"desde ayer\",\"evolucion\":\"no informado\",\"intensidadDolor\":5,\"signosAlarma\":[],\"antecedentesRelevantes\":[],\"medicamentos\":[],\"alergias\":[],\"posibilidadEmbarazo\":\"no informado\",\"observaciones\":\"Sintomas referidos: fiebre. Niega dificultad respiratoria. No se identifican signos de alarma en el texto aportado\",\"nivelPrioridad\":3,\"requiereAtencionInmediata\":false,\"recomendacionSeguridad\":\"Si aparece dificultad para respirar, dolor de pecho, desmayo, confusion o empeoramiento, busque atencion urgente.\"}\n(1 row)",
+  "prioridadSql": "consulta_id | estado_consulta | nivel_de_gravedad_bot | prioridad | entrada_estado | orden_relativo \n-------------+-----------------+-----------------------+-----------+----------------+----------------\n           5 | EN_COLA         | URGENTE               |         3 | EN_COLA        |              4\n(1 row)",
+  "mensajesSql": "fecha_hora_envio      |  autor   |                                                                           contenido                                                                           \n----------------------------+----------+---------------------------------------------------------------------------------------------------------------------------------------------------------------\n 2026-07-09 22:52:56.195235 | BOT      | Hola. Voy a hacerte algunas preguntas breves para registrar tus sintomas. No reemplazo una evaluacion medica. Cual es el principal motivo de tu consulta hoy?\n 2026-07-09 22:52:56.227547 | PACIENTE | ï»¿# Un mensaje por linea. Las lineas vacias y comentarios se ignoran.\n 2026-07-09 22:53:02.669562 | BOT      | Â¿CuÃ¡les son tus sÃ­ntomas principales?\n 2026-07-09 22:53:02.917175 | PACIENTE | Tengo fiebre y dolor de garganta desde ayer.\n 2026-07-09 22:53:07.366096 | BOT      | Necesito precisar el dolor: del 0 al 10, cuanto te duele ahora y en que zona lo sentis?\n 2026-07-09 22:53:07.604573 | PACIENTE | La fiebre llego a 38.5 y el dolor es 5 de 10.\n 2026-07-09 22:53:11.834341 | BOT      | Â¿CuÃ¡l es la causa de tu dolor de garganta?\n 2026-07-09 22:53:12.060967 | PACIENTE | No tengo dificultad para respirar ni dolor de pecho.\n 2026-07-09 22:53:16.699141 | BOT      | Gracias. Ya registre tus respuestas.\n(9 rows)"
+}

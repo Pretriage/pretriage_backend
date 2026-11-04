@@ -1,0 +1,17 @@
+[Unit]
+Description=Pretriage temporary Docker demo
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/pretriage
+ExecStart=/usr/bin/docker compose --env-file .env.aws -f compose.aws.yaml up -d --wait --wait-timeout 180
+ExecStop=/usr/bin/docker compose --env-file .env.aws -f compose.aws.yaml stop --timeout 60
+TimeoutStartSec=240
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

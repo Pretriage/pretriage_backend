@@ -1,0 +1,26 @@
+let trust = Resources.DeploymentRole.Properties.AssumeRolePolicyDocument.Statement[0]
+let permissions = Resources.DeploymentRole.Properties.Policies[0].PolicyDocument.Statement[*]
+
+rule GITHUB_TRUST_IS_BRANCH_SCOPED {
+  %trust.Effect == "Allow"
+  %trust.Action == "sts:AssumeRoleWithWebIdentity"
+  %trust.Condition.StringEquals.'token.actions.githubusercontent.com:aud' == "sts.amazonaws.com"
+  %trust.Condition.StringEquals.'token.actions.githubusercontent.com:sub'.'Fn::Sub' == '${GitHubSubjectPrefix}:ref:refs/heads/produccion'
+}
+
+rule DEPLOYMENT_HAS_ONLY_REQUIRED_PERMISSION_GROUPS {
+  %permissions.Sid IN ["RegistryAuthentication", "BackendImagesOnly", "DeployToDemoHostOnly", "DeploymentStatus"]
+  %permissions.Effect == "Allow"
+}
+
+rule IMAGE_PUBLISHING_IS_SCOPED {
+  %permissions[Sid == "RegistryAuthentication"].Action == "ecr:GetAuthorizationToken"
+  %permissions[Sid == "BackendImagesOnly"].Action[*] IN ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:DescribeImages"]
+  %permissions[Sid == "BackendImagesOnly"].Resource.'Fn::Sub' == 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}'
+}
+
+rule DEPLOYMENT_TARGET_IS_SCOPED {
+  %permissions[Sid == "DeployToDemoHostOnly"].Action == "ssm:SendCommand"
+  %permissions[Sid == "DeployToDemoHostOnly"].Resource[*].'Fn::Sub' IN ['arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript', 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${InstanceId}']
+  %permissions[Sid == "DeploymentStatus"].Action[*] IN ["ec2:DescribeInstances", "ssm:DescribeInstanceInformation", "ssm:GetCommandInvocation"]
+}

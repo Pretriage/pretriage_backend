@@ -1,0 +1,37 @@
+{
+  "chatId": 4,
+  "usuario": "fc***@frba.utn.edu.ar",
+  "hospitalPlaceId": "e2e-hospital-chat",
+  "especialidad": "CLINICA_MEDICA",
+  "turnosScript": [
+    {
+      "turno": 1,
+      "paciente": "Tengo fiebre y dolor de garganta desde ayer.",
+      "bot": "Necesito precisar el dolor: del 0 al 10, cuanto te duele ahora y en que zona lo sentis?",
+      "atencionEstimada": null
+    },
+    {
+      "turno": 2,
+      "paciente": "La fiebre llego a 38.5 y el dolor es 5 de 10.",
+      "bot": "Tenes dificultad para respirar, dolor de pecho, confusion, desmayo, convulsiones o algun empeoramiento importante?",
+      "atencionEstimada": null
+    },
+    {
+      "turno": 3,
+      "paciente": "No tengo dificultad para respirar ni dolor de pecho.",
+      "bot": "Tenes antecedentes relevantes, alergias, tomas alguna medicacion o podria haber embarazo?",
+      "atencionEstimada": null
+    },
+    {
+      "turno": 4,
+      "paciente": "No tengo enfermedades previas, no tomo medicacion y no tengo alergias.",
+      "bot": "Gracias. Ya registre tus respuestas.",
+      "atencionEstimada": {
+        "fechaHoraAtencionEstimada": "2026-07-09T22:02:39.3630033"
+      }
+    }
+  ],
+  "resultadoTriageSql": "resultado_triage_json                                                                                                                                                                                                                                                                                                  \n------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n {\"motivoConsulta\":\"Tengo fiebre y dolor de garganta desde ayer.\",\"sintomas\":[\"fiebre\"],\"inicio\":\"desde ayer\",\"evolucion\":\"no informado\",\"intensidadDolor\":5,\"signosAlarma\":[],\"antecedentesRelevantes\":[],\"medicamentos\":[],\"alergias\":[],\"posibilidadEmbarazo\":\"no informado\",\"observaciones\":\"Sintomas referidos: fiebre. Niega dificultad respiratoria. No se identifican signos de alarma en el texto aportado\",\"nivelPrioridad\":3,\"requiereAtencionInmediata\":false,\"recomendacionSeguridad\":\"Si aparece dificultad para respirar, dolor de pecho, desmayo, confusion o empeoramiento, busque atencion urgente.\"}\n(1 row)",
+  "prioridadSql": "consulta_id | estado_consulta | nivel_de_gravedad_bot | prioridad | entrada_estado | orden_relativo \n-------------+-----------------+-----------------------+-----------+----------------+----------------\n           4 | EN_COLA         | URGENTE               |         3 | EN_COLA        |              3\n(1 row)",
+  "mensajesSql": "fecha_hora_envio      |  autor   |                                                                           contenido                                                                           \n----------------------------+----------+---------------------------------------------------------------------------------------------------------------------------------------------------------------\n 2026-07-09 22:02:14.717938 | BOT      | Hola. Voy a hacerte algunas preguntas breves para registrar tus sintomas. No reemplazo una evaluacion medica. Cual es el principal motivo de tu consulta hoy?\n 2026-07-09 22:02:14.7505   | PACIENTE | Tengo fiebre y dolor de garganta desde ayer.\n 2026-07-09 22:02:19.991501 | BOT      | Necesito precisar el dolor: del 0 al 10, cuanto te duele ahora y en que zona lo sentis?\n 2026-07-09 22:02:20.209327 | PACIENTE | La fiebre llego a 38.5 y el dolor es 5 de 10.\n 2026-07-09 22:02:26.154414 | BOT      | Tenes dificultad para respirar, dolor de pecho, confusion, desmayo, convulsiones o algun empeoramiento importante?\n 2026-07-09 22:02:26.670678 | PACIENTE | No tengo dificultad para respirar ni dolor de pecho.\n 2026-07-09 22:02:32.980026 | BOT      | Tenes antecedentes relevantes, alergias, tomas alguna medicacion o podria haber embarazo?\n 2026-07-09 22:02:33.222197 | PACIENTE | No tengo enfermedades previas, no tomo medicacion y no tengo alergias.\n 2026-07-09 22:02:39.343631 | BOT      | Gracias. Ya registre tus respuestas.\n(9 rows)"
+}

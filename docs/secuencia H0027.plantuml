@@ -1,0 +1,447 @@
+@startuml Diagrama de secuencia AdminHospital H0027
+
+actor AdminHospital
+
+
+alt crearSector
+    AdminHospital -> Controller : POST /api/admin/hospital/{hospitalId}/configuracion/sectores
+
+    AdminHospital <-- Controller : ok
+end
+alt eliminarSector
+    AdminHospital -> Controller : DELETE /api/admin/hospital/{hospitalId}/configuracion/sectores
+
+    AdminHospital <-- Controller : ok
+end 
+alt modificarSector
+    AdminHospital -> Controller : PUT /api/admin/hospital/{hospitalId}/configuracion/sectores
+
+    AdminHospital <-- Controller : ok
+end
+alt deshabilitar especialidad
+AdminHospital -> Controller: DELETE /api/admin/hospitales/{hospitalId}/configuracion/especialidades/{especialidadId}
+
+Controller -> HospitalConfiguracionService : deshabilitarEspecialidad(userId, hospitalId, especialidadId)
+HospitalConfiguracionService -> StaffAccessService : exiguirAdmin(userId, hospitalId)
+HospitalConfiguracionService <-- StaffAccessService: UsuarioAuth
+HospitalConfiguracionService -> HospitalConfiguracionService: hospital()
+HospitalConfiguracionService -> HospitalConfiguracionService: especialidad()
+note over HospitalConfiguracionService: Si ya esta deshabilitada, devuelve configuracion sin guardar ni auditar
+HospitalConfiguracionService -> RepoSalas: existsByHospitalIdAndEspecialidadIdAndActivaTrue(hospitalId, especialidadId)
+alt existe
+    HospitalConfiguracionService --> Controller: throw ConflictoDeEstadoException
+else no existe
+    HospitalConfiguracionService-> HospitalConfiguracionService: quitarAsociacionHospitalEspecialidad()
+    note over HospitalConfiguracionService: Conserva catalogo, sectores, salas, consultas y sesiones
+    HospitalConfiguracionService -> HospitalConfiguracionService: obtenerConfiguracionHospital()
+end
+
+Controller <-- HospitalConfiguracionService: ConfiguracionHospitalResponse(especialidades, salas, sectores)
+AdminHospital <-- Controller :ConfiguracionHospitalResponse(especialidades, salas, sectores)
+end
+alt crear sala
+AdminHospital -> Controller: POST /api/admin/hospitales/{hospitalId}/configuracion/sectores/{sectorId}/salas
+
+Controller -> HospitalConfiguracionService: crearSala(userId, hospitalId, sectorId, GuardarSalaRequest(nombre,especialidad))
+HospitalConfiguracionService -> StaffAccessService : exiguirAdmin(userId, hospitalId)
+HospitalConfiguracionService <-- StaffAccessService: UsuarioAuth
+HospitalConfiguracionService -> HospitalConfiguracionService: hospital()
+HospitalConfiguracionService -> HospitalConfiguracionService: especialidadHabilitada()
+HospitalConfiguracionService -> HospitalConfiguracionService: sector()
+HospitalConfiguracionService -> RepoSalas: existsByHospitalIdAndSectorIdAndNombreIgnoreCase(hospitalId, sectorId, nombre)
+
+alt existe
+    Controller <-- HospitalConfiguracionService: throw ConflictoDeEstadoException
+else no existe
+    HospitalConfiguracionService -> HospitalConfiguracionService: new Sala()
+    HospitalConfiguracionService -> RepoSalas: save(Sala)
+    HospitalConfiguracionService -> HospitalConfiguracionService: crearResponse()
+end
+
+Controller <-- HospitalConfiguracionService: SalaHospitalResponse
+AdminHospital <-- Controller: SalaHospitalResponse
+end
+alt actualizar sala
+AdminHospital -> Controller: PUT /api/admin/hospitales/{hospitalId}/configuracion/sectores/{sectorId}/salas/{salaId}
+Controller -> HospitalConfiguracionService: actualizarSala(userId, hospitalId,sectorId, salaId, GuardarSalaRequest(nombre,especialidad))
+HospitalConfiguracionService -> StaffAccessService : exiguirAdmin(userId, hospitalId)
+HospitalConfiguracionService <-- StaffAccessService: UsuarioAuth
+HospitalConfiguracionService -> HospitalConfiguracionService: hospital()
+HospitalConfiguracionService -> HospitalConfiguracionService: sala()
+HospitalConfiguracionService -> HospitalConfiguracionService: sector()
+HospitalConfiguracionService -> HospitalConfiguracionService: especialidadHabilitada()
+HospitalConfiguracionService -> RepoSalas: existsByHospitalIdAndNombreIgnoreCaseAndSectorIdAndIdNot(hospitalId, nombreSala, sectorId, salaId)
+alt existe
+   Controller <-- HospitalConfiguracionService : throw new ConflictoDeEstadoException
+else no existe
+    HospitalConfiguracionService -> RepoSalas: update(Sala)
+    HospitalConfiguracionService <-- RepoSalas: Sala
+    HospitalConfiguracionService -> HospitalConfiguracionService: crearResponse()
+end
+
+Controller <-- HospitalConfiguracionService: SalaHospitalResponse
+AdminHospital <-- Controller: SalaHospitalResponse
+end
+alt actualizar estado sala
+AdminHospital -> Controller: PATCH /api/admin/hospitales/{hospitalId}/configuracion/sectores/{sectorId}/salas/{salaId}/estado
+Controller -> HospitalConfiguracionService: actualizarEstadoSala(userId, hospitalid, sectorId, salaId, ActualizarEstadoSalaRequest(activa))
+HospitalConfiguracionService -> StaffAccessService : exiguirAdmin(userId, hospitalId)
+HospitalConfiguracionService <-- StaffAccessService: UsuarioAuth
+HospitalConfiguracionService -> HospitalConfiguracionService: hospital()
+HospitalConfiguracionService -> HospitalConfiguracionService: sala()
+HospitalConfiguracionService -> HospitalConfiguracionService: sector()
+HospitalConfiguracionService -> HospitalConfiguracionService: esActivarSala(ActualizarEstadoSalaRequest)
+alt si
+    HospitalConfiguracionService -> HospitalConfiguracionService: especialidadHabilitada(hospital, especialidadId)
+end
+HospitalConfiguracionService -> RepoSalas: update(Sala)
+HospitalConfiguracionService <-- RepoSalas: Sala
+HospitalConfiguracionService -> HospitalConfiguracionService: crearResponse()
+
+Controller <-- HospitalConfiguracionService: SalaHospitalResponse
+AdminHospital <-- Controller: SalaHospitalResponse
+end
+@enduml
+
+@startuml Diagrama de secuencia Paciente H0027
+actor Paciente
+
+group selecionar hospital
+    Paciente -> Controller: GET /api/hospitales/cercanos
+    
+
+    Controller -> AtencionHospitalService: buscarHospitalesCercanos()
+
+    Paciente <-- Controller: List<Hospital>
+
+    Paciente -> Controller: POST /api/atencion/hospital
+    
+    Controller -> AtencionHospitalService: seleccionarHospital(userId, pacienteId, codigoEsp)
+    
+    AtencionHospitalService -> AtencionHospitalService: obtenerPaciente(userId)
+    
+    AtencionHospitalService -> AtencionHospitalService: obtenerEspecialidad(codigoEsp)
+    AtencionHospitalService -> RepoConsultasMedicas: obtenerConsultaPaciente(paciente)
+    AtencionHospitalService <-- RepoConsultasMedicas: Optional<ConsultaMedica>
+    AtencionHospitalService -> Optional : isPresent
+    
+    alt Existe
+        AtencionHospitalService -> Optional : get
+        AtencionHospitalService <-- Optional: ConsultaMedica
+    end
+    alt noExiste
+        AtencionHospitalService -> AtencionHospitalService : new ConsultaMedica
+
+        AtencionHospitalService -> AsignacionSectorService : asignarSector(consultaMedica)
+        AsignacionSectorService -> ConsultaMedica: getEspecialidad()
+        AsignacionSectorService <-- ConsultaMedica: Especialidad
+        AsignacionSectorService -> RepoSectores : findByEspecialidad(Especialidad)
+        AsignacionSectorService <-- RepoSectores : List<Sector>
+        AsignacionSectorService -> AsignacionSectorService : seleccionarSector()
+
+        AtencionHospitalService <-- AsignacionSectorService: Sector(salas: List<Sala>)
+    end
+
+    AtencionHospitalService -> IngresoColaService : ingresar(consultaMedica, NivelDeGravedadDefault, Sector)
+    
+    IngresoColaService -> IngresoColaService: updateConsultaMedica()
+    IngresoColaService -> RepoGestoresDeColas: findByHospitalIdAndEspecialidadIdAndSectorId()
+    alt existe
+        IngresoColaService <-- RepoGestoresDeColas: GestorDeCola
+    end
+    alt noExiste
+        IngresoColaService -> IngresoColaService : verificarQueExiste(Sector)
+        alt existe 
+
+            IngresoColaService-> IngresoColaService : new GestorDeCola(Hospital,Especialidad, Sector)
+        end
+        alt noExiste
+            IngresoColaService-> IngresoColaService: Throw new Error
+        end
+    end
+    IngresoColaService-> GestorDeCola: agregarConsultaMedicaALaCola(ConsultaMedica)
+    IngresoColaService -> RepoGestoresDeColas: save(gestor)
+
+    IngresoColaService -> RepoEntradasCola :  findByConsultaMedicaId()
+
+    alt existe
+        IngresoColaService <-- RepoEntradasCola: EntradaCola
+    end
+    alt noExiste
+        IngresoColaService -> IngresoColaService: new EntradaCola
+    end
+    IngresoColaService -> RepoEntradasCola: update
+
+    AtencionHospitalService <-- IngresoColaService : OK
+    
+    Controller <-- AtencionHospitalService: OK
+    
+    Paciente <-- Controller: OK
+    
+    Paciente -> Controller: GET /api/atencion/hospital
+    
+    Controller -> AtencionHospitalService: obtenerHospitalSeleccionado(userId)
+    
+    AtencionHospitalService -> AtencionHospitalService : obtenerConsultaConHospitalSeleccionado(userId)
+    AtencionHospitalService -> ConsultaMedica : getHospital()
+    AtencionHospitalService <-- ConsultaMedica: Hospital
+    AtencionHospitalService -> Hospital : getDireccion
+    AtencionHospitalService <-- Hospital : Direccion
+    AtencionHospitalService -> ConsultaMedica: getSector()
+    AtencionHospitalService <-- ConsultaMedica: Sector(salas: List<Sala>)
+    
+    AtencionHospitalService -> AtencionHospitalService : armarResponse()
+    AtencionHospitalService --> Controller : HospitalSeleccionado
+    Controller --> Paciente : HospitalSeleccionado
+
+end
+@enduml
+
+
+@startuml Diagrama de secuencia Medico H0027
+
+actor Medico
+
+Medico -> Controller: POST /api/medico/sesiones/{sesionId}/llamar-proximo
+
+Controller -> AtencionMedicoService : llamarProximo(userId, sessionId)
+AtencionMedicoService -> AtencionMedicoService: obtenerSesionActiva(sessionId, userId)
+AtencionMedicoService -> RepoGestoresDeColas: findByHospitalIdAndEspecialidadIdAndSectorId()
+AtencionMedicoService <-- RepoGestoresDeColas: GestorDeCola
+AtencionMedicoService -> RepoEntradasDeCola: findFirstByGestorDeColaIdAndEstadoOrderByPrioridadDescOrdenRelativoAsc(gestorId, EN_COLA)
+AtencionMedicoService <-- RepoEntradasDeCola: EntradaCola
+
+AtencionMedicoService -> EntradaCola : getConsulta()
+AtencionMedicoService <-- EntradaCola: ConsultaMedica
+AtencionMedicoService -> AtencionMedicoService: armarDTO()
+
+Controller <-- AtencionMedicoService : ConsultaLlamadaDTO(Paciente,Sala,EstadoConsulta,Prioridad,...)
+
+Medico <-- Controller: ConsultaLlamadaDTO(Paciente,Sala,EstadoConsulta,Prioridad,...)
+
+Medico -> Controller: POST /api/medico/sesiones
+Controller-> AtencionMedicoService: iniciarSesion(userId, hospitalId, especialidadId, sectorId, salaId)
+AtencionMedicoService ->AtencionMedicoService : obtenerMedico()
+AtencionMedicoService ->AtencionMedicoService : hospital()
+AtencionMedicoService ->AtencionMedicoService : especialidad()
+AtencionMedicoService ->AtencionMedicoService : sala()
+AtencionMedicoService ->AtencionMedicoService : sector()
+AtencionMedicoService ->AtencionMedicoService : validarAsignacion()
+AtencionMedicoService ->AtencionMedicoService : validarSala()
+AtencionMedicoService ->AtencionMedicoService : validarRecursosDisponibles()
+AtencionMedicoService ->AtencionMedicoService : new SesionAtencionMedica
+AtencionMedicoService -> RepoSesionesAtencionMedica : save(SesionAtencionMedica)
+AtencionMedicoService -> AtencionMedicoService: crearResponse()
+
+Controller <-- AtencionMedicoService: SesionAtencionMedicaDTO
+Medico <-- Controller: SesionAtencionMedicaDTO
+@enduml
+
+@startuml Diagrama de secuencia Recepcionista H0027
+
+actor Recepcionista
+Recepcionista -> Controller: POST /api/recepcion/sessiones
+Recepcionista <-- Controller: Session
+
+Recepcionista -> Controller: POST /api/recepcion/admisiones
+Controller -> AdmisionRecepcionService: crearAdmision(userId, CrearAdmisionRecepcionRequest(nombre, apellido, ...))
+AdmisionRecepcionService -> AdmisionRecepcionService: obtenerSesionActiva(userId, sesionId) 
+AdmisionRecepcionService -> RepoPacientes: findByNumeroDocumentoOrUsuarioAuthNumeroDocumento(dni, dni)
+alt existe
+    AdmisionRecepcionService <-- RepoPacientes: Paciente
+else noExiste
+    AdmisionRecepcionService -> AdmisionRecepcionService: crearPacientePresencial(CrearAdmisionRecepcionRequest(nombre, apellido, ...), dni)
+end
+AdmisionRecepcionService -> AdmisionRecepcionService: validarSiExisteConsultaMedicaEnCurso()
+alt existe
+     AdmisionRecepcionService --> Controller: throw AtencionEnCursoException()
+else noExiste
+   AdmisionRecepcionService-> RepoEspecialidadesMedicas: findByCodigo(codigoEspecilidad)
+   AdmisionRecepcionService<-- RepoEspecialidadesMedicas: EspecialidadMedica
+   AdmisionRecepcionService-> AdmisionRecepcionService: validarEspecialidadDisponible(EspecialidadMedica)
+   AdmisionRecepcionService -> AdmisionRecepcionService: new ConsultaMedica
+
+    AdmisionRecepcionService -> AsignacionSectorService : asignarSector(consultaMedica)
+    AsignacionSectorService -> ConsultaMedica: getEspecialidad()
+    AsignacionSectorService <-- ConsultaMedica: Especialidad
+    AsignacionSectorService -> RepoSectores : findByEspecialidad(Especialidad)
+    AsignacionSectorService <-- RepoSectores : List<Sector>
+    AsignacionSectorService -> AsignacionSectorService : seleccionarSector()
+    AdmisionRecepcionService <-- AsignacionSectorService: Sector(salas: List<Sala>)
+
+   AdmisionRecepcionService -> RepoConsultaMedica: save(ConsultaMedicaNueva)
+   AdmisionRecepcionService <-- RepoConsultaMedica: ok
+   AdmisionRecepcionService -> AdmisionRecepcionService: new AdmisionRecepcion
+   AdmisionRecepcionService -> RepoAdmisionesRecepcion: save(AdmisionRecepcion)
+   AdmisionRecepcionService <-- RepoAdmisionesRecepcion: ok
+end
+
+Controller <-- AdmisionRecepcionService: AdmisionRecepcionDTO(pacienteId, estadoAdmision, prioridad, tiempoEstimado)
+
+Recepcionista <-- Controller: AdmisionRecepcion(pacienteId, estadoAdmision, prioridad, tiempoEstimado)
+
+Recepcionista -> Controller: POST /api/recepcion/admisiones/{admisionId}/finalizar
+
+Controller -> AdmisionRecepcionService : finalizar(userId, admisionId, formulario)
+AdmisionRecepcionService -> AdmisionRecepcionService : obtenerAdmision(userId, admisionId)
+AdmisionRecepcionService -> SesionAdmision: getConsultaMedica()
+AdmisionRecepcionService <-- SesionAdmision: ConsultaMedica
+AdmisionRecepcionService -> ConsultaMedica: getSector()
+AdmisionRecepcionService <-- ConsultaMedica: Sector
+AdmisionRecepcionService -> TriageFormularioService: clasificar(formulario)
+alt exito
+    AdmisionRecepcionService <-- TriageFormularioService: TriageResultDTO
+else ProveedorIaException
+    AdmisionRecepcionService -> TriageFormularioService: resultadoFallback()
+    AdmisionRecepcionService <-- TriageFormularioService: TriageResultDTO 
+end
+
+AdmisionRecepcionService -> IngresoColaService: ingresar(consultaMedica, prioridad, sector)
+AdmisionRecepcionService <-- IngresoColaService: TiempoEstimadoAtencionResponse
+AdmisionRecepcionService -> AdmisionRecepcionService: armarDTO()
+
+Controller <-- AdmisionRecepcionService: AdmisionRecepcionDTO(pacienteId, estadoAdmision, prioridad, tiempoEstimado)
+
+Recepcionista <-- Controller: AdmisionRecepcionDTO(pacienteId, estadoAdmision, prioridad, tiempoEstimado)
+
+Recepcionista -> Controller: POST /api/recepcion/admisiones/{admisionId}/cancelar
+Recepcionista <-- Controller: AdmisionRecepcionDetalleDTO(pacienteId, estadoAdmision, prioridad, tiempoEstimado)
+
+
+@enduml
+
+@startuml Diagrama de clases H0027
+class Sector {
+    - especialidad: EspecialidadMedica
+    - salas: Set<Sala>
+    - hospital: Hospital
+    - asignados: Set<Paciente>
+    - nombreSector: String
+}
+
+class AsignacionSectorService {
+
+    - asignarSector(ConsultaMedica): Sector
+
+}
+AsignacionSectorService --> Sector
+
+class GestorDeCola {
+    - hospital: Hospital
+    - especialidad: EspecialidadMedica
+    - consultasEnEspera: List<ConsultaMedica>
+    - entradas: List<EntradaCola>
+    - sector: Sector
+}
+GestorDeCola -> Sector
+
+class Sala {
+
+    - nombre: String
+    - sector: Sector
+}
+Sector -> "*" Sala
+Sala -> Sector
+
+@enduml
+
+@startuml Diagrama de secuencia Invitacion Medico H0027
+
+actor AdminHospital
+actor Medico
+
+== Admin crea la invitacion ==
+
+AdminHospital -> Controller: POST /api/admin/hospitales/{hospitalId}/invitaciones
+
+Controller -> StaffAccessService: crearInvitacion(userId, hospitalId, CrearInvitacionRequest(email, roles=[MEDICO], matricula, tipoMatricula, jurisdiccionMatricula, especialidadIds))
+StaffAccessService -> StaffAccessService: exigirAdminHospital(userId, hospitalId)
+StaffAccessService <-- StaffAccessService: UsuarioAuth (membresia ACTIVA con rol ADMIN_HOSPITAL)
+StaffAccessService -> RepoHospitales: findById(hospitalId)
+StaffAccessService <-- RepoHospitales: Hospital
+
+alt ya existe invitacion PENDIENTE para el email
+    Controller <-- StaffAccessService: throw ConflictoDeEstadoException
+else no existe
+    StaffAccessService -> StaffAccessService: validarDatosMedicos(roles, matricula, tipoMatricula, jurisdiccionMatricula, especialidadIds, hospital)
+    alt matricula invalida, sin jurisdiccion provincial o especialidad no habilitada
+        Controller <-- StaffAccessService: throw IllegalStateException
+    else datos validos
+        StaffAccessService -> StaffAccessService: nuevoToken() + hash(token)
+        StaffAccessService -> RepoInvitaciones: save(InvitacionHospital(PENDIENTE, emailNormalizado, roles, especialidadIds, matricula, venceEn=7 dias))
+        StaffAccessService -> InvitationEmailPort: deliver(InvitationEmailMessage(email, hospital, roles, venceEn, token))
+        alt envio correcto
+            StaffAccessService <-- InvitationEmailPort: DeliveryResult(sent=true)
+        else envio falla
+            StaffAccessService <-- InvitationEmailPort: DeliveryResult(sent=false) queda PENDIENTE_ENTREGA
+        end
+        StaffAccessService -> RepoAuditorias: save(AuditoriaHospital, accion=INVITACION_CREADA)
+    end
+end
+
+Controller <-- StaffAccessService: InvitacionResponse(id, hospital, email, estado, roles, especialidadIds, matricula, venceEn, emailEnviado)
+AdminHospital <-- Controller: InvitacionResponse(...)
+
+opt reenviar (rotacion de token)
+    AdminHospital -> Controller: POST /api/admin/hospitales/{hospitalId}/invitaciones/{invitacionId}/reenviar
+    Controller -> StaffAccessService: reenviarInvitacion(userId, hospitalId, invitacionId)
+    StaffAccessService -> StaffAccessService: verificar estado != ACEPTADA y != REVOCADA
+    StaffAccessService -> StaffAccessService: nuevoToken() + hash(token) (rota el secreto anterior)
+    StaffAccessService -> RepoInvitaciones: save(PENDIENTE, venceEn=7 dias)
+    StaffAccessService -> InvitationEmailPort: deliver(...)
+    StaffAccessService -> RepoAuditorias: save(INVITACION_REENVIADA)
+    AdminHospital <-- Controller: InvitacionResponse(...)
+end
+
+opt revocar
+    AdminHospital -> Controller: DELETE /api/admin/hospitales/{hospitalId}/invitaciones/{invitacionId}
+    Controller -> StaffAccessService: revocarInvitacion(userId, hospitalId, invitacionId)
+    StaffAccessService -> RepoInvitaciones: save(REVOCADA)
+    StaffAccessService -> RepoAuditorias: save(INVITACION_REVOCADA)
+    AdminHospital <-- Controller: 204 No Content
+end
+
+== El medico revisa la invitacion ==
+
+Medico -> Controller: GET /api/invitaciones/{token}/resumen
+
+Controller -> StaffAccessService: resumir(token)
+StaffAccessService -> RepoInvitaciones: findByTokenHash(hash(token))
+StaffAccessService <-- RepoInvitaciones: InvitacionHospital
+StaffAccessService -> StaffAccessService: estadoActual() (EXPIRADA si vencio)
+Controller <-- StaffAccessService: InvitacionResumenResponse(hospitalNombre, roles, especialidadIds, matricula, venceEn, cuentaExistente)
+Medico <-- Controller: InvitacionResumenResponse(...)
+
+== El medico acepta ==
+
+alt existe cuenta (usuario autenticado)
+    Medico -> Controller: POST /api/invitaciones/{token}/aceptar
+    Controller -> StaffAccessService: aceptar(userId, token)
+    StaffAccessService -> StaffAccessService: invitacionValida(token, exigirPendiente=true)
+    StaffAccessService -> StaffAccessService: verificar email del usuario == email de la invitacion
+else nuevo usuario
+    Medico -> Controller: POST /api/invitaciones/{token}/registro (RegistrarInvitadoRequest(nombre, apellido, documento, password))
+    Controller -> StaffAccessService: registrarYAceptar(token, request)
+    StaffAccessService -> StaffAccessService: invitacionValida(token, exigirPendiente=true)
+    StaffAccessService -> AuthService: registrarUsuarioYObtenerAuth0Id(email, password)
+    StaffAccessService <-- AuthService: auth0Id
+    StaffAccessService -> RepoUsuariosAuth: save(UsuarioAuth(emailNormalizado, rol=USER))
+end
+
+group aceptar(invitacion, usuario)
+    StaffAccessService -> RepoMembresias: findByUsuarioIdAndHospitalId o new
+    StaffAccessService -> RepoMembresias: save(MembresiaHospital(ACTIVA, roles=[MEDICO], creadaPor=invitadaPor, fechaAceptacion))
+    StaffAccessService -> StaffAccessService: materializarPerfilesCompatibles(usuario, invitacion)
+    StaffAccessService -> RepoMedicos: findByUsuarioAuthId o new Medico(matricula)
+    StaffAccessService -> RepoCredenciales: save(CredencialProfesional, si no existe)
+    loop por cada especialidadId de la invitacion
+        StaffAccessService -> RepoAsignaciones: save(AsignacionMedicoHospital(medico, hospital, especialidad))
+    end
+    StaffAccessService -> RepoInvitaciones: save(ACEPTADA, aceptadaPor, fechaAceptacion)
+    StaffAccessService -> RepoAuditorias: save(INVITACION_ACEPTADA)
+end
+
+Controller <-- StaffAccessService: MembresiaResponse(id, hospitalId, hospitalNombre, ACTIVA, roles=[MEDICO])
+Medico <-- Controller: MembresiaResponse(...)
+
+@enduml

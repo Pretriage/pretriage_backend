@@ -1,0 +1,384 @@
+@startuml
+title DER — Sistema de preclasificación de pacientes
+left to right direction
+hide circle
+hide methods
+skinparam linetype ortho
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam entity {
+  BackgroundColor #FFFFFF
+  BorderColor #334155
+  FontColor #0F172A
+  HeaderBackgroundColor #E2E8F0
+}
+
+' Generado desde las entidades y anotaciones JPA actuales
+
+package "Personas" {
+  entity "asignacion_medico_hospital" as asignacion_medico_hospital {
+    * id: bigint <<PK,NN>>
+      id_medico: bigint <<FK>>
+      id_hospital: bigint <<FK>>
+      id_especialidad_medica: bigint <<FK>>
+    --
+    UNIQUE (id_medico, id_hospital, id_especialidad_medica)
+  }
+  entity "cambio_contrasenia_token" as cambio_contrasenia_token {
+    * id: bigint <<PK,NN>>
+      id_usuario: varchar <<FK,NN>>
+      token: varchar <<UQ,NN>>
+      fecha_hora_creacion: timestamp <<NN>>
+      fecha_hora_expiracion: timestamp <<NN>>
+      estado: varchar <<NN>>
+  }
+  entity "credencial_profesional" as credencial_profesional {
+    * id: bigint <<PK,NN>>
+      medico_id: bigint <<FK,NN>>
+      numero: varchar <<NN>>
+      tipo: varchar <<NN>>
+      jurisdiccion: varchar <<NN>>
+      estado: varchar <<NN>>
+    --
+    UNIQUE (numero, tipo, jurisdiccion)
+  }
+  entity "medico" as medico {
+    * id: bigint <<PK,NN>>
+      auth_id: varchar <<FK,UQ>>
+      matricula: varchar
+  }
+  entity "paciente" as paciente {
+    * id: bigint <<PK,NN>>
+      auth_id: varchar <<FK,UQ>>
+      id_coordenada: bigint <<FK,UQ>>
+      genero_biologico: varchar
+      genero_con_el_que_se_identifica: varchar
+      nombre: varchar
+      apellido: varchar
+      numero_documento: varchar <<UQ>>
+      tipo_documento: varchar
+      origen_registro: varchar
+      fecha_nacimiento: date
+      telefono: varchar
+      correo_electronico: varchar
+      id_direccion: bigint <<FK,UQ>>
+      peso: double
+      altura: integer
+  }
+  entity "recepcionista" as recepcionista {
+      id_hospital: bigint <<FK>>
+    * id: bigint <<PK,NN>>
+      auth_id: varchar <<FK,UQ>>
+  }
+  entity "usuario_auth" as usuario_auth {
+    * id: varchar <<PK,NN>>
+      nombre: varchar
+      apellido: varchar
+      numero_documento: varchar
+      tipo_documento: varchar
+      correo_electronico: varchar
+      rol: varchar
+  }
+}
+
+package "Hospitales" {
+  entity "coordenada" as coordenada {
+    * id: bigint <<PK,NN>>
+      latitud: double
+      longitud: double
+  }
+  entity "credencial" as credencial {
+    * id: bigint <<PK,NN>>
+      numero_afiliado: varchar
+      plan: varchar
+      fecha_vencimiento: date
+      id_obra_social: bigint <<FK>>
+      id_paciente: bigint <<FK>>
+  }
+  entity "direccion" as direccion {
+    * id: bigint <<PK,NN>>
+      calle: varchar
+      altura: varchar
+      piso: varchar
+      codigo_postal: varchar
+      ciudad: varchar
+      provincia: varchar
+      id_coordenada: bigint <<FK,UQ>>
+  }
+  entity "especialidad_medica" as especialidad_medica {
+    * id: bigint <<PK,NN>>
+      codigo: varchar <<UQ,NN>>
+      nombre: varchar <<NN>>
+  }
+  entity "hospital" as hospital {
+    * id: bigint <<PK,NN>>
+      place_id: varchar
+      nombre: varchar
+      id_direccion: bigint <<FK,UQ>>
+  }
+  entity "hospital_especialidad_medica" as hospital_especialidad_medica {
+      id_hospital: bigint <<FK,NN>>
+      id_especialidad_medica: bigint <<FK,NN>>
+  }
+  entity "obra_social" as obra_social {
+    * id: bigint <<PK,NN>>
+      nombre: varchar
+      virgente: boolean <<NN>>
+  }
+  entity "sala" as sala {
+    * id: bigint <<PK,NN>>
+      nombre: varchar
+      activa: boolean <<NN>>
+      id_hospital: bigint <<FK>>
+      id_especialidad_medica: bigint <<FK>>
+  }
+}
+
+package "Acceso y membresías" {
+  entity "auditoria_hospital" as auditoria_hospital {
+    * id: bigint <<PK,NN>>
+      hospital_id: bigint <<FK,NN>>
+      actor_id: varchar <<FK,NN>>
+      fecha: timestamptz
+      accion: varchar
+      objetivo: varchar
+      resultado: varchar
+  }
+  entity "invitacion_hospital" as invitacion_hospital {
+    * id: bigint <<PK,NN>>
+      hospital_id: bigint <<FK,NN>>
+      email_normalizado: varchar <<NN>>
+      estado: varchar
+      token_hash: varchar <<UQ,NN>>
+      matricula: varchar
+      tipo_matricula: varchar
+      jurisdiccion_matricula: varchar
+      vence_en: timestamptz
+      fecha_creacion: timestamptz
+      fecha_aceptacion: timestamptz
+      email_enviado: boolean
+      ultimo_intento_envio: timestamptz
+      cantidad_intentos_envio: integer
+      invitada_por_id: varchar <<FK,NN>>
+      aceptada_por_id: varchar <<FK>>
+  }
+  entity "invitacion_hospital_especialidad" as invitacion_hospital_especialidad {
+      invitacion_id: bigint <<FK,NN>>
+      especialidad_id: bigint
+  }
+  entity "invitacion_hospital_rol" as invitacion_hospital_rol {
+      invitacion_id: bigint <<FK,NN>>
+      rol: varchar
+  }
+  entity "membresia_hospital" as membresia_hospital {
+    * id: bigint <<PK,NN>>
+      usuario_auth_id: varchar <<FK,NN>>
+      hospital_id: bigint <<FK,NN>>
+      estado: varchar
+      fecha_creacion: timestamptz
+      fecha_aceptacion: timestamptz
+      fecha_suspension: timestamptz
+      creada_por_usuario_auth_id: varchar <<FK>>
+    --
+    UNIQUE (usuario_auth_id, hospital_id)
+  }
+  entity "membresia_hospital_rol" as membresia_hospital_rol {
+      membresia_id: bigint <<FK,NN>>
+      rol: varchar
+  }
+}
+
+package "Consultas y atención" {
+  entity "atencion_medica" as atencion_medica {
+    * id: bigint <<PK,NN>>
+      id_consulta_medica: bigint <<FK,UQ,NN>>
+      id_sesion_atencion_medica: bigint <<FK,NN>>
+      estado: varchar
+      fecha_hora_inicio: timestamp
+      fecha_hora_fin: timestamp
+  }
+  entity "consulta_medica" as consulta_medica {
+    * id: bigint <<PK,NN>>
+      fecha_hora_creacion: timestamp
+      codigo_llamado: varchar <<UQ>>
+      id_hospital: bigint <<FK>>
+      id_especialidad_medica: bigint <<FK>>
+      id_medico: bigint <<FK>>
+      id_sala: bigint <<FK>>
+      id_paciente: bigint <<FK>>
+      nivel_de_gravedad_bot: varchar
+      nivel_de_gravedad_medico: varchar
+      resumen_pretriage_json: text
+      estado_consulta: varchar
+      id_gestor_de_cola: bigint <<FK>>
+      id_chat: bigint <<FK,UQ>>
+  }
+  entity "entrada_cola" as entrada_cola {
+    * id: bigint <<PK,NN>>
+      id_gestor_de_cola: bigint <<FK>>
+      id_consulta_medica: bigint <<FK,UQ>>
+      estado: varchar
+      tipo_pausa: varchar
+      prioridad: integer <<NN>>
+      orden_relativo: bigint <<NN>>
+      fecha_hora_ingreso: timestamp
+      fecha_hora_llamado: timestamp
+      fecha_hora_salida_temporal: timestamp
+      fecha_hora_ultima_repregunta: timestamp
+      fecha_hora_limite_respuesta: timestamp
+  }
+  entity "estudio_clinico" as estudio_clinico {
+    * id: bigint <<PK,NN>>
+      id_paciente: bigint <<FK>>
+      nombre_archivo: varchar
+      tipo_archivo: varchar
+      extension_archivo: varchar
+      descripcion: varchar
+      fecha_subida: timestamp
+      tamano_archivo: bigint
+      ruta_archivo: varchar
+      activo: boolean <<NN>>
+  }
+  entity "gestor_de_cola" as gestor_de_cola {
+    * id: bigint <<PK,NN>>
+      id_hospital: bigint <<FK>>
+      id_especialidad_medica: bigint <<FK>>
+    --
+    UNIQUE (id_hospital, id_especialidad_medica)
+  }
+  entity "revision_prioridad_consulta" as revision_prioridad_consulta {
+    * id: bigint <<PK,NN>>
+      id_consulta_medica: bigint <<FK,NN>>
+      id_medico: bigint <<FK,NN>>
+      decision: varchar <<NN>>
+      prioridad_anterior: varchar <<NN>>
+      prioridad_nueva: varchar <<NN>>
+      motivo: varchar
+      fecha_hora: timestamp <<NN>>
+  }
+  entity "sesion_atencion_medica" as sesion_atencion_medica {
+    * id: bigint <<PK,NN>>
+      id_medico: bigint <<FK>>
+      id_hospital: bigint <<FK>>
+      id_especialidad_medica: bigint <<FK>>
+      id_sala: bigint <<FK>>
+      estado: varchar
+      fecha_hora_inicio: timestamp
+      fecha_hora_fin: timestamp
+      fecha_hora_pausa: timestamp
+  }
+  entity "sintoma" as sintoma {
+      id_consulta_medica: bigint <<FK>>
+    * id: bigint <<PK,NN>>
+      nombre: text
+  }
+}
+
+package "Recepción" {
+  entity "admision_recepcion" as admision_recepcion {
+    * id: bigint <<PK,NN>>
+      id_consulta_medica: bigint <<FK,UQ,NN>>
+      id_sesion_recepcion: bigint <<FK,NN>>
+      estado: varchar
+      formulario_json: text
+      resultado_triage_json: text
+      fecha_hora_inicio: timestamp
+      fecha_hora_finalizacion: timestamp
+      fecha_hora_cancelacion: timestamp
+  }
+  entity "sesion_recepcion" as sesion_recepcion {
+    * id: bigint <<PK,NN>>
+      id_recepcionista: bigint <<FK,NN>>
+      id_hospital: bigint <<FK,NN>>
+      estado: varchar
+      fecha_hora_inicio: timestamp
+      fecha_hora_fin: timestamp
+  }
+}
+
+package "Chat" {
+  entity "chat" as chat {
+    * id: bigint <<PK,NN>>
+      fecha_hora_creacion: timestamp
+      paciente_id: bigint <<FK>>
+      finalizado: boolean <<NN>>
+      resultado_triage_json: text
+  }
+  entity "mensaje" as mensaje {
+      chat_id: bigint <<FK>>
+    * id: bigint <<PK,NN>>
+      contenido: text <<NN>>
+      autor: varchar <<NN>>
+      paciente_id: bigint <<FK>>
+      fecha_hora_envio: timestamp <<NN>>
+  }
+}
+
+chat ||--o{ mensaje : "chat_id"
+consulta_medica ||--|| admision_recepcion : "id_consulta_medica"
+consulta_medica ||--|| atencion_medica : "id_consulta_medica"
+consulta_medica ||--o| entrada_cola : "id_consulta_medica"
+consulta_medica |o--o| chat : "id_chat"
+consulta_medica ||--o{ mensaje : "id_consulta_medica"
+consulta_medica ||--|{ revision_prioridad_consulta : "id_consulta_medica"
+consulta_medica ||--o{ sintoma : "id_consulta_medica"
+coordenada ||--o| direccion : "id_coordenada"
+coordenada ||--o| paciente : "id_coordenada"
+direccion ||--o| hospital : "id_direccion"
+direccion ||--o| paciente : "id_direccion"
+especialidad_medica ||--o{ asignacion_medico_hospital : "id_especialidad_medica"
+especialidad_medica ||--o{ consulta_medica : "id_especialidad_medica"
+especialidad_medica ||--o{ gestor_de_cola : "id_especialidad_medica"
+especialidad_medica ||--|{ hospital_especialidad_medica : "id_especialidad_medica"
+especialidad_medica ||--o{ sala : "id_especialidad_medica"
+especialidad_medica ||--o{ sesion_atencion_medica : "id_especialidad_medica"
+gestor_de_cola ||--o{ consulta_medica : "id_gestor_de_cola"
+gestor_de_cola ||--o{ entrada_cola : "id_gestor_de_cola"
+hospital ||--o{ asignacion_medico_hospital : "id_hospital"
+hospital ||--|{ auditoria_hospital : "hospital_id"
+hospital ||--o{ consulta_medica : "id_hospital"
+hospital ||--o{ gestor_de_cola : "id_hospital"
+hospital ||--|{ hospital_especialidad_medica : "id_hospital"
+hospital ||--|{ invitacion_hospital : "hospital_id"
+hospital ||--|{ membresia_hospital : "hospital_id"
+hospital ||--o{ recepcionista : "id_hospital"
+hospital ||--o{ sala : "id_hospital"
+hospital ||--o{ sesion_atencion_medica : "id_hospital"
+hospital ||--|{ sesion_recepcion : "id_hospital"
+invitacion_hospital ||--|{ invitacion_hospital_especialidad : "invitacion_id"
+invitacion_hospital ||--|{ invitacion_hospital_rol : "invitacion_id"
+medico ||--o{ asignacion_medico_hospital : "id_medico"
+medico ||--o{ consulta_medica : "id_medico"
+medico ||--|{ credencial_profesional : "medico_id"
+medico ||--|{ revision_prioridad_consulta : "id_medico"
+medico ||--o{ sesion_atencion_medica : "id_medico"
+membresia_hospital ||--|{ membresia_hospital_rol : "membresia_id"
+obra_social ||--o{ credencial : "id_obra_social"
+paciente ||--o{ chat : "paciente_id"
+paciente ||--o{ consulta_medica : "id_paciente"
+paciente ||--o{ credencial : "id_paciente"
+paciente ||--o{ estudio_clinico : "id_paciente"
+paciente ||--o{ mensaje : "paciente_id"
+recepcionista ||--|{ sesion_recepcion : "id_recepcionista"
+sala ||--o{ consulta_medica : "id_sala"
+sala ||--o{ sesion_atencion_medica : "id_sala"
+sesion_atencion_medica ||--|{ atencion_medica : "id_sesion_atencion_medica"
+sesion_recepcion ||--|{ admision_recepcion : "id_sesion_recepcion"
+usuario_auth ||--|{ auditoria_hospital : "actor_id"
+usuario_auth ||--|{ cambio_contrasenia_token : "id_usuario"
+usuario_auth ||--o{ invitacion_hospital : "aceptada_por_id"
+usuario_auth ||--|{ invitacion_hospital : "invitada_por_id"
+usuario_auth ||--o| medico : "auth_id"
+usuario_auth ||--o{ membresia_hospital : "creada_por_usuario_auth_id"
+usuario_auth ||--|{ membresia_hospital : "usuario_auth_id"
+usuario_auth ||--o| paciente : "auth_id"
+usuario_auth ||--o| recepcionista : "auth_id"
+
+legend right
+  |= Marca |= Significado |
+  | PK | Clave primaria |
+  | FK | Clave foránea |
+  | UQ | Valor único |
+  | NN | No admite NULL |
+endlegend
+@enduml

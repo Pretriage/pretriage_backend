@@ -1,0 +1,26 @@
+{
+  "chatId": 1,
+  "usuario": "fc***@frba.utn.edu.ar",
+  "hospitalPlaceId": "e2e-hospital-chat",
+  "especialidad": "CLINICA_MEDICA",
+  "turnosScript": [
+    {
+      "turno": 1,
+      "paciente": "﻿# Un mensaje por linea. Las lineas vacias y comentarios se ignoran.",
+      "bot": "Gracias. Ya registre tus respuestas.",
+      "atencionEstimada": {
+        "fechaHoraAtencionEstimada": "2026-07-09T23:17:12.5315908",
+        "hayMedicosActivos": false,
+        "medicosActivos": 0,
+        "medicosParaEstimacion": 1,
+        "mensaje": "No hay medicos atendiendo esta especialidad en este momento. La hora es una estimacion tentativa.",
+        "minutosPromedioAtencion": 10,
+        "pacientesAntes": 0,
+        "posicionEnCola": 1
+      }
+    }
+  ],
+  "resultadoTriageSql": "resultado_triage_json                                                                                                                                                                                                                                                                                     \n-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n {\"motivoConsulta\":\"ï»¿# Un mensaje por linea. Las lineas vacias y comentarios se ignoran.\",\"sintomas\":[\"no informado\"],\"inicio\":\"no informado\",\"evolucion\":\"no informado\",\"intensidadDolor\":null,\"signosAlarma\":[],\"antecedentesRelevantes\":[],\"medicamentos\":[],\"alergias\":[],\"posibilidadEmbarazo\":\"no informado\",\"observaciones\":\"No se identifican signos de alarma en el texto aportado\",\"nivelPrioridad\":1,\"requiereAtencionInmediata\":false,\"recomendacionSeguridad\":\"Si aparece dificultad para respirar, dolor de pecho, desmayo, confusion o empeoramiento, busque atencion urgente.\"}\n(1 row)",
+  "prioridadSql": "consulta_id | estado_consulta | nivel_de_gravedad_bot | prioridad | entrada_estado | orden_relativo \n-------------+-----------------+-----------------------+-----------+----------------+----------------\n           1 | EN_COLA         | NO_URGENTE            |         1 | EN_COLA        |              1\n(1 row)",
+  "mensajesSql": "fecha_hora_envio      |  autor   |                                                                           contenido                                                                           \n----------------------------+----------+---------------------------------------------------------------------------------------------------------------------------------------------------------------\n 2026-07-09 23:17:04.520488 | BOT      | Hola. Voy a hacerte algunas preguntas breves para registrar tus sintomas. No reemplazo una evaluacion medica. Cual es el principal motivo de tu consulta hoy?\n 2026-07-09 23:17:04.601294 | PACIENTE | ï»¿# Un mensaje por linea. Las lineas vacias y comentarios se ignoran.\n 2026-07-09 23:17:12.460238 | BOT      | Gracias. Ya registre tus respuestas.\n(3 rows)"
+}

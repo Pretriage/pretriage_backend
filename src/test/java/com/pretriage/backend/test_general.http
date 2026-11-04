@@ -1,0 +1,21 @@
+@baseUrl = http://localhost:8080
+@accessToken = <JWT_ACCESS_TOKEN>
+
+### Register as patient
+POST {{baseUrl}}/api/register
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "nombre": "Valentin",
+  "apellido": "Manfredi",
+  "numeroDocumento": "44335196",
+  "tipoDocumento": "DNI",
+  "tipoUsuario": "PACIENTE",
+  "matricula": null
+}
+
+### Create chat
+POST {{baseUrl}}/api/chat
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json

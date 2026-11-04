@@ -1,0 +1,20 @@
+{
+	auto_https disable_redirects
+}
+
+{$API_DOMAIN:api.pretriage.com.ar} {
+	# Cloudflare Origin CA certificate: keep the api DNS record PROXIED.
+	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
+
+	# Access logging is deliberately off: browser voice tokens can be in queries.
+	header Cache-Control "no-store"
+	header X-Content-Type-Options nosniff
+	request_body {
+		max_size 12MB
+	}
+	reverse_proxy backend:8080 {
+		# Flush SSE immediately. Caddy forwards WebSocket upgrades automatically.
+		flush_interval -1
+		stream_close_delay 5m
+	}
+}
