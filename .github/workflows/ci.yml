@@ -5,10 +5,12 @@ on:
     branches:
       - desarrollo
       - main
+      - produccion
   push:
     branches:
       - desarrollo
       - main
+      - produccion
   workflow_dispatch:
 
 permissions:
@@ -16,7 +18,8 @@ permissions:
 
 concurrency:
   group: backend-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Do not interrupt a production update; newer runs wait instead.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/produccion' }}
 
 jobs:
   build-and-test:
@@ -51,10 +54,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: "21"
@@ -68,3 +71,104 @@ jobs:
 
       - name: Test demo data generator offline
         run: python3 -B -m unittest discover -s scripts -p 'test_demo_seed*.py'
+
+      - name: Test deployment safeguards offline
+        run: python3 -B -m unittest discover -s scripts -p 'test_*deploy*.py'
+
+  publish-image:
+    name: publish-image
+    needs: build-and-test
+    if: github.ref == 'refs/heads/produccion' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+    outputs:
+      image: ${{ steps.tag.outputs.repository }}@${{ steps.build.outputs.digest }}
+      account-id: ${{ steps.config.outputs.account-id }}
+    steps:
+      - name: Checkout tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check deployment configuration and branch protection
+        id: config
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$ECR_REPOSITORY_URI" =~ ^([0-9]{12})\.dkr\.ecr\.us-east-1\.amazonaws\.com/[a-z0-9][a-z0-9._/-]+$ ]] || { echo '::error::Configure ECR_REPOSITORY_URI'; exit 1; }
+          account_id="${BASH_REMATCH[1]}"
+          [[ "$AWS_DEPLOY_ROLE_ARN" == "arn:aws:iam::$account_id:role/"* ]] || { echo '::error::Configure AWS_DEPLOY_ROLE_ARN for the same project'; exit 1; }
+          [[ "$EC2_INSTANCE_ID" =~ ^i-[0-9a-f]{8,17}$ ]] || { echo '::error::Configure EC2_INSTANCE_ID'; exit 1; }
+          protected=$(gh api "repos/$GITHUB_REPOSITORY/branches/produccion" --jq .protected)
+          [[ "$protected" == true ]] || { echo '::error::Protect produccion before enabling deployment'; exit 1; }
+          echo "account-id=$account_id" >> "$GITHUB_OUTPUT"
+      - name: Authenticate with temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: ${{ steps.config.outputs.account-id }}
+          role-session-name: pretriage-publish-${{ github.run_id }}
+      - name: Authenticate Docker to ECR
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+      - name: Set immutable image tag
+        id: tag
+        shell: bash
+        run: |
+          echo "repository=$ECR_REPOSITORY_URI" >> "$GITHUB_OUTPUT"
+          echo "tag=$ECR_REPOSITORY_URI:prod-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Configure builder
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build and publish tested backend
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tag.outputs.tag }}
+          provenance: false
+      - name: Record published image
+        env:
+          IMAGE: ${{ steps.tag.outputs.repository }}@${{ steps.build.outputs.digest }}
+        run: |
+          printf 'Imagen publicada para `%s`: `%s`\n\nLa actualización de EC2 se confirma en el job deploy-backend.\n' "$GITHUB_SHA" "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-backend:
+    name: deploy-backend
+    needs: publish-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      IMAGE: ${{ needs.publish-image.outputs.image }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+    steps:
+      - name: Checkout tested deployment scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Authenticate with temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: ${{ needs.publish-image.outputs.account-id }}
+          role-session-name: pretriage-deploy-${{ github.run_id }}
+      - name: Update backend on existing running EC2
+        run: python3 -B scripts/github_deploy.py --instance-id "$EC2_INSTANCE_ID" --image "$IMAGE" --commit "$GITHUB_SHA"
+      - name: Record successful deployment
+        run: |
+          printf 'Backend desplegado y saludable: commit `%s`, imagen `%s`.\n' "$GITHUB_SHA" "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
+      - name: Record unconfirmed deployment
+        if: failure()
+        run: |
+          printf 'La imagen se publicó, pero el despliegue NO quedó confirmado. Revisá el error y el estado del comando SSM antes de reintentar. EC2 no se enciende automáticamente.\n' >> "$GITHUB_STEP_SUMMARY"

@@ -123,6 +123,7 @@ La configuración de despliegue está separada del entorno de desarrollo:
 - [Variables, salud, S3 y CORS del backend](docs/27-aws-backend-runtime.md).
 - [Compatibilidad de Amplify, frontend, móvil y Cloudflare](docs/29-aws-frontend-and-dns.md).
 - [Carga de usuarios y datos sintéticos para la demo](docs/31-demo-data-seeding.md).
+- [Publicación automática del backend desde la rama produccion](docs/32-github-backend-deployment.md).
 
 `Dockerfile` construye una imagen Java 21 sin credenciales locales.
 `compose.aws.yaml` ejecuta PostgreSQL 18, backend y Caddy. La infraestructura de

@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: GitHub Actions deployment credentials for the existing Pretriage demo, without starting compute or changing clinical data.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    ref: [docs/32-github-backend-deployment.md]
+    must:
+      - Reuse the existing EC2 instance and ECR repository in the selected Region.
+      - Trust only the protected produccion branch of the configured repository.
+      - Do not grant EC2 start/stop, database, S3, or IAM administration permissions.
+Parameters:
+  InstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: Existing demo instance; this stack does not modify its lifecycle.
+  EcrRepositoryName:
+    Type: String
+    AllowedPattern: '^[a-z0-9][a-z0-9._/-]{1,255}$'
+    Description: Name of the existing private backend image repository.
+  GitHubSubjectPrefix:
+    Type: String
+    Default: repo:Pretriage@350848470/pretriage_backend@1441221730
+    AllowedPattern: '^repo:[A-Za-z0-9_.@-]+/[A-Za-z0-9_.@-]+$'
+    Description: Verified repository OIDC subject prefix, including immutable IDs if enabled by GitHub.
+  ExistingGitHubOidcProviderArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws:iam::[0-9]{12}:oidc-provider/token.actions.githubusercontent.com$'
+    Description: Reuse the existing GitHub provider, or leave empty to create it once.
+Conditions:
+  CreateGitHubProvider: !Equals [!Ref ExistingGitHubOidcProviderArn, '']
+Resources:
+  GitHubProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateGitHubProvider
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Exchange GitHub identity tokens for temporary deployment credentials.
+        must: [Reuse an existing provider rather than duplicating or replacing it.]
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+  DeploymentRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Publish images and update one existing host without static GitHub secrets.
+        must:
+          - Exact OIDC audience and protected branch subject; no PR or wildcard branch trust.
+          - SSM shell commands target only the existing demo host.
+          - Readiness and application rollback do not restore database schema or data.
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateGitHubProvider, !Ref GitHubProvider, !Ref ExistingGitHubOidcProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub '${GitHubSubjectPrefix}:ref:refs/heads/produccion'
+      Policies:
+        - PolicyName: PublishAndDeployExistingBackend
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: RegistryAuthentication
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: BackendImagesOnly
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:DescribeImages
+                Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}'
+              - Sid: DeployToDemoHostOnly
+                Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript'
+                  - !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${InstanceId}'
+              # These read APIs do not support resource-level permissions.
+              - Sid: DeploymentStatus
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ssm:DescribeInstanceInformation
+                  - ssm:GetCommandInvocation
+                Resource: '*'
+Outputs:
+  DeploymentRoleArn:
+    Description: GitHub repository variable AWS_DEPLOY_ROLE_ARN.
+    Value: !GetAtt DeploymentRole.Arn
+  RepositoryUri:
+    Description: GitHub repository variable ECR_REPOSITORY_URI.
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}/${EcrRepositoryName}'
+  InstanceId:
+    Description: GitHub repository variable EC2_INSTANCE_ID.
+    Value: !Ref InstanceId
+  GitHubOidcProviderArn:
+    Description: Provider managed here or reused; preserve ownership of a reused provider.
+    Value: !If [CreateGitHubProvider, !Ref GitHubProvider, !Ref ExistingGitHubOidcProviderArn]
