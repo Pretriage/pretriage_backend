@@ -1,8 +1,9 @@
 # Despliegue web y DNS
 
-Esta guía recoge el diseño previsto para `pretriage.com.ar`. Documenta los
-ajustes y las verificaciones pendientes; no afirma que el sitio o la API estén
-desplegados en producción.
+Esta guía documenta la configuración web, móvil y DNS de la demo. Amplify ya
+desplegó la rama `desarrollo`; `app.pretriage.com.ar` sirve la aplicación por
+HTTPS con certificado válido y Amplify informa `AVAILABLE`. La API responde en
+su hostname de Cloudflare.
 
 El [estado real de la demo y los pendientes](30-aws-demo-status.md) registra
 la infraestructura creada después de esta preparación.
@@ -105,12 +106,10 @@ Next.js.
 Con el override, la copia aislada pasó typecheck, lint, las tres pruebas de
 contrato y `next build`. El manifiesto de funciones del build contiene
 `/_middleware` con runtime `nodejs` y seis matchers. El build confirma la
-compilación de Next.js 15 con middleware Node; todavía hace falta validar en un
-preview real de Amplify el despliegue y los flujos de login, refresh y rotación
-de cookies. Durante esa evaluación no hubo cambios en el repositorio web
-original; luego el usuario autorizó aplicar el ajuste.
-Quedan pendientes la vista previa de Amplify y las comprobaciones reales de
-login, refresco/rotación de cookies y respuestas autenticadas.
+compilación de Next.js 15 con middleware Node. La rama `desarrollo` ya se
+desplegó en Amplify, y `/` y `/login` responden HTTP 200 por HTTPS en
+`app.pretriage.com.ar`. Quedan pendientes las comprobaciones autenticadas de
+login, refresco/rotación de cookies y respuestas de API.
 
 La adaptación actualiza `pretriage_frontend_web/AGENTS.md` y su documentación
 vigente. `docs/integration-2026-10-25.md` permanece como historial fechado.
@@ -142,7 +141,16 @@ Docker `backend:8080`, dentro de la red Compose. Spring Boot no debe publicar
 un puerto del host.
 
 Para Android, compilar con
-`BACKEND_BASE_URL=https://api.pretriage.com.ar`. El cliente móvil deriva WSS
+`-PBACKEND_BASE_URL=https://api.pretriage.com.ar` desde el repositorio móvil:
+
+```powershell
+./gradlew.bat :composeApp:assembleDebug -PBACKEND_BASE_URL=https://api.pretriage.com.ar
+```
+
+El parámetro de Gradle tiene prioridad sobre `local.properties` y genera la URL
+para ese APK; no modifica la configuración local de desarrollo. Capturar la
+salida en un log temporal y detener Gradle al terminar, como indica el
+`AGENTS.md` móvil. El cliente móvil deriva WSS
 para `/api/chat/{chatId}/voz` y usa HTTPS/SSE para
 `/api/atencion/tiempos/suscribirse/{consultaId}`. La app Android declara permiso
 de micrófono, pero el manifiesto todavía permite HTTP sin cifrar: las builds de
@@ -152,10 +160,13 @@ listo para producción con estos flujos.
 
 ## DNS y certificados en Cloudflare
 
-Conservar los nameservers existentes de Cloudflare. Para `app.pretriage.com.ar`,
-agregar los destinos de rama y CNAME de verificación que muestre Amplify, todos
-como **DNS only**. No cambiar una opción global de proxy o redirección que afecte
-a otros nombres de la zona.
+Conservar los nameservers existentes de Cloudflare. La asociación actual de
+Amplify es `app.pretriage.com.ar`, vinculada a `desarrollo`. Mantener el destino
+de aplicación y los CNAME de verificación de Amplify como **DNS only** (nube
+gris); el hostname responde HTTP 200 y presenta un certificado válido. Amplify
+informa `AVAILABLE` y el dominio está verificado. No activar proxy
+para estos registros ni cambiar una opción global de proxy o redirección que
+afecte otros nombres. No configurar otros dominios ni redirecciones.
 
 Crear `api.pretriage.com.ar` como un registro A a la Elastic IP asociada a EC2 y
 mantenerlo **Proxied** (nube naranja). La API usa un certificado Cloudflare
@@ -208,15 +219,15 @@ de Cloudflare es el punto de entrada.
 
 - [x] Elegir Next.js 15.5.28 para continuar con Amplify.
 - [x] Alinear paquetes y React, usar middleware Node y adaptar ESLint.
-- [ ] Validar `runtime: "nodejs"` en una vista previa de Amplify.
+- [x] Validar el despliegue de `runtime: "nodejs"` en Amplify.
 - [x] Ejecutar en el repo web `npm ci`, `npm run typecheck`, `npm run lint`,
       `npm run test:contracts` y `npm run build`.
 - [ ] En la vista previa, comprobar rutas SSR, login, refresco/rotación de
       cookies, expiración de sesión y los Route Handlers `/api/*`.
 - [ ] Configurar `BACKEND_API_URL` y confirmar que no se publique en bundles
       `NEXT_PUBLIC_*`.
-- [ ] Asociar `app.pretriage.com.ar` con los valores reales de Amplify y dejar
-      DNS de aplicación y verificación en DNS only.
+- [x] Configurar los CNAME de `app.pretriage.com.ar` en DNS only y verificar
+      HTTP 200, TLS válido y estado `AVAILABLE` en Amplify.
 - [ ] Mantener `api.pretriage.com.ar` proxied; validar Full (strict), Caddy,
       bypass de caché `/api/*`, WebSocket de voz, SSE y heartbeats.
 - [ ] Confirmar que el Security Group solo permita TCP 443 desde la lista

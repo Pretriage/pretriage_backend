@@ -10,8 +10,8 @@ La instalación es una demo de un solo host para datos sintéticos.
 
 ```mermaid
 flowchart LR
-    Browser[Usuario] --> Amplify[Next.js en Amplify]
-    Amplify --> CF[Cloudflare: api.pretriage.com.ar]
+    Browser[Usuario] --> Web[app.pretriage.com.ar en Amplify]
+    Web --> CF[Cloudflare: api.pretriage.com.ar]
     CF --> Caddy[Caddy en EC2:443]
     Caddy --> API[Spring Boot]
     API --> PG[(PostgreSQL 18 en EBS)]
@@ -257,9 +257,9 @@ desde la lista de prefijos IPv4 de Cloudflare.
 
 1. En Cloudflare, creá o actualizá un único registro A `api.pretriage.com.ar` con la Elastic IP asignada a la instancia y dejalo **Proxied**. El helper solo actualiza un registro A existente y exige que haya exactamente uno. La Elastic IP se informa al completar el stack; no copies una IP de una sesión anterior.
 2. Publicá los cambios locales del repositorio web en la rama que conectes a Amplify. El checkout revisado usa `desarrollo`; no asumir que GitHub contiene los cambios locales sin publicar. `pretriage_frontend_web/package.json` fija Next.js **15.5.28** y `pretriage_frontend_web/amplify.yml` usa Node 22, `npm ci`, `BACKEND_API_URL` y artefactos `.next`. Es Amplify Hosting para SSR; no se agrega un backend Amplify Gen 2.
-   En la consola de Amplify, conectá `MatiasCanevaro/pretriage_frontend_web` y elegí esa rama. Autorizá la GitHub App de Amplify para el repositorio y usá Hosting compute (`WEB_COMPUTE`), con el rol de servicio de SSR que ofrece la consola. El frontend llama por HTTPS a Spring Boot; no necesita permisos sobre el bucket clínico ni un rol de despliegue de Amplify Gen 2. [Despliegue de Next.js SSR](https://docs.aws.amazon.com/amplify/latest/userguide/deploy-nextjs-app.html).
+   Amplify está configurado con `Pretriage/pretriage_frontend_web`, la rama `desarrollo` y Hosting compute (`WEB_COMPUTE`), con el rol de servicio de SSR de la consola. El frontend llama por HTTPS a Spring Boot; no necesita permisos sobre el bucket clínico ni un rol de despliegue de Amplify Gen 2. [Despliegue de Next.js SSR](https://docs.aws.amazon.com/amplify/latest/userguide/deploy-nextjs-app.html).
 3. En los ajustes de variables de entorno de la rama de Amplify que se va a publicar, definí `BACKEND_API_URL=https://api.pretriage.com.ar`. Es una URL del backend, no una clave secreta; el código la consume en rutas/funciones de servidor. El `.env.example` local usa `http://localhost:8080` solo para desarrollo.
-4. Agregá `app.pretriage.com.ar` como dominio personalizado de Amplify y configurá sus registros DNS exactamente como indica la consola. Confirmá que Amplify publique la rama prevista (`desarrollo` en el checkout revisado) y ejecutá el build de esa rama.
+4. El dominio personalizado actual de Amplify es `app.pretriage.com.ar`, vinculado a `desarrollo`. Sus CNAME de aplicación y validación están configurados en Cloudflare como **DNS only**. El hostname respondió HTTP 200 con TLS válido y Amplify informa `AVAILABLE`. No agregues redirecciones ni alias no elegidos. La URL por defecto de Amplify también permanece disponible.
 5. El frontend y el backend deben coincidir en los orígenes CORS y WebSocket. El backend usa `PRETRIAGE_CORS_ALLOWED_ORIGINS` para HTTP y `PRETRIAGE_VOZ_ORIGENES` para `/api/chat/{id}/voz`; voz usa `wss://` en el sitio publicado. Caddy reenvía el upgrade WebSocket y descarga SSE inmediatamente.
 
 Si el A de `api` aún no existe, crealo manualmente después del despliegue inicial.
