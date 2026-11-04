@@ -119,7 +119,7 @@ case "$1" in
     case "$action" in
       up)
         [ "$*" = '-d --no-deps --force-recreate --wait --wait-timeout 180 backend' ] || exit 90
-        image=$(sed -n 's/^BACKEND_IMAGE=//p' "$env_file")
+        image=$(sed -n 's/^BACKEND_IMAGE=//p' "$env_file" | tr -d '\r' | sed -e "s/^['\"]//" -e "s/['\"]$//")
         case ",${FAKE_DOCKER_UP_FAIL_IMAGES:-}," in *",$image,"*) exit 1 ;; esac
         health=healthy
         case ",${FAKE_DOCKER_UNHEALTHY_IMAGES:-}," in *",$image,"*) health=unhealthy ;; esac
@@ -207,6 +207,26 @@ esac
         self.assertIn("was not changed", result.stderr)
         self.assertEqual(self.original_env, self.env_file.read_text(encoding="utf-8"))
         self.assertFalse(self.state.exists())
+        self.assert_no_secrets(result)
+
+    def test_compose_quoted_image_values_and_crlf_are_supported(self) -> None:
+        for quote, ending in [("'", "\n"), ('"', "\n"), ("'", "\r\n")]:
+            with self.subTest(quote=quote, ending=repr(ending)):
+                contents = self.original_env.replace(OLD_IMAGE, quote + OLD_IMAGE + quote)
+                self.env_file.write_bytes(contents.replace("\n", ending).encode())
+                result = self.run_script()
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(self.original_env.replace(OLD_IMAGE, NEW_IMAGE),
+                                 self.env_file.read_text(encoding="utf-8"))
+                self.assert_no_secrets(result)
+
+    def test_rollback_preserves_quoted_original_environment(self) -> None:
+        original = self.original_env.replace(OLD_IMAGE, "'" + OLD_IMAGE + "'")
+        self.env_file.write_text(original, encoding="utf-8")
+        result = self.run_script(FAKE_DOCKER_UNHEALTHY_IMAGES=NEW_IMAGE)
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("previous backend was restored and verified healthy", result.stderr)
+        self.assertEqual(original, self.env_file.read_text(encoding="utf-8"))
         self.assert_no_secrets(result)
 
     def test_readiness_failure_restores_and_verifies_previous_backend(self) -> None:

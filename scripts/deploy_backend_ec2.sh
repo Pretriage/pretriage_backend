@@ -109,6 +109,13 @@ if (( backend_image_count != 1 )); then
     die '.env.aws must contain exactly one BACKEND_IMAGE entry'
 fi
 old_image=${old_line#BACKEND_IMAGE=}
+# Compose accepts quoted dotenv values (the initial AWS setup uses single
+# quotes). Unwrap one matching pair without evaluating shell expressions.
+old_image=${old_image%$'\r'}
+case "$old_image" in
+    \"*\") old_image=${old_image:1:-1} ;;
+    \'*\') old_image=${old_image:1:-1} ;;
+esac
 old_image_pattern='^([0-9]{12}\.dkr\.ecr\.us-east-1\.amazonaws\.com)/((([a-z0-9]+([._-][a-z0-9]+)*)(/[a-z0-9]+([._-][a-z0-9]+)*)*))(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[a-fA-F0-9]{64})$'
 if [[ ! $old_image =~ $old_image_pattern ]]; then
     die '.env.aws BACKEND_IMAGE must be an image URI in the existing us-east-1 ECR repository'
