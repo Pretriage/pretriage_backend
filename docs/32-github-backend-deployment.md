@@ -112,8 +112,10 @@ backend esté actualizado. Encender manualmente y reejecutar el workflow de
 `produccion`; el arranque normal de EC2 conserva la imagen que ya tenía configurada.
 
 El script Bash descargará primero la imagen, conservará el archivo de entorno y
-actualizará únicamente `BACKEND_IMAGE`. Recrea solo backend, espera su healthcheck
-y verifica readiness interno, imagen efectiva y acceso HTTPS público. Si falla
+actualizará únicamente `BACKEND_IMAGE`. El valor previo admite comillas simples
+o dobles y finales de línea CRLF, sin evaluar expresiones de shell. Recrea solo
+backend, espera su healthcheck y verifica readiness interno, imagen efectiva y
+acceso HTTPS público. Si falla
 la actualización, restaura la configuración y vuelve a la imagen anterior local.
 El resultado sigue siendo fallido aunque esa recuperación tenga éxito.
 
