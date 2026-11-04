@@ -111,6 +111,12 @@ publicada, el job de despliegue falla con una explicación y no se afirma que el
 backend esté actualizado. Encender manualmente y reejecutar el workflow de
 `produccion`; el arranque normal de EC2 conserva la imagen que ya tenía configurada.
 
+Los [horarios diarios de EC2](33-aws-instance-schedule.md) se administran mediante
+otro stack: encienden a las 10:00 y apagan a las 22:00 de Buenos Aires. Este rol
+de GitHub conserva sus permisos sin inicio/parada; el Scheduler usa su propio rol.
+El apagado programado puede interrumpir un despliegue, por lo que conviene promover
+cambios con margen antes de las 22:00.
+
 El script Bash descargará primero la imagen, conservará el archivo de entorno y
 actualizará únicamente `BACKEND_IMAGE`. El valor previo admite comillas simples
 o dobles y finales de línea CRLF, sin evaluar expresiones de shell. Recrea solo

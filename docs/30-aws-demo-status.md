@@ -136,6 +136,11 @@ de borrado; no se tocaron archivos de la aplicación.
 
 ## Operación y costos
 
+EventBridge Scheduler administra ahora los [horarios diarios](33-aws-instance-schedule.md):
+encendido a las 10:00 y apagado a las 22:00, hora de Buenos Aires, todos los días.
+Una parada manual conserva esos horarios; para mantener apagada la demo hay que
+deshabilitarlos antes del siguiente encendido.
+
 Consultar el estado y operar la instancia con el script documentado en
 [despliegue del backend](28-aws-demo-deployment.md):
 
