@@ -69,6 +69,7 @@ class DemoSeedLoginTests(unittest.TestCase):
         request, timeout = opener.requests[0]
         self.assertEqual(request.full_url, "https://api.example.test/api/login")
         self.assertEqual(request.method, "POST")
+        self.assertEqual(request.get_header("User-agent"), "PretriageDemoSeed/1.0")
         self.assertEqual(timeout, 15)
         self.assertEqual(json.loads(request.data), {"email": "demo@example.test", "password": "do-not-print-this"})
 

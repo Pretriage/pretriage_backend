@@ -1,10 +1,31 @@
 # Carga de datos para la demo
 
 `scripts/seed_demo.py` prepara datos de muestra para validar los tableros y los
-flujos de la demo. El script está listo, pero **todavía no se ejecutó contra
-Auth0 ni contra la base AWS**. El entorno desplegado puede contener usuarios y
-datos cargados manualmente; publicar este script no ejecuta ninguna carga.
-La aplicación de datos queda expresamente diferida por pedido del usuario.
+flujos de la demo. El 05/11/2026 se aplicó en AWS con `seed_key`
+`demo-caba-v1`, tras renovar la sesión de AWS. La instancia ya estaba encendida
+por su horario diario; durante la carga no se inició ni detuvo EC2.
+
+La carga confirmó en PostgreSQL:
+
+- 8 hospitales y 16 obras sociales.
+- 29 identidades nuevas de Auth0; quedaron 32 filas en `usuario_auth`, pues se
+  conservaron 3 existentes.
+- 646 pacientes: 640 históricos, 3 asociados a las cuentas demo y 3 previos.
+- 2.600 consultas y entradas de cola; 2.208 atenciones finalizadas y 392
+  canceladas.
+- 1.716 chats con pretriage, 40 sectores, 80 salas, 32 membresías, 16 sesiones
+  activas (Clínica Médica y Traumatología) y 480 sesiones históricas finalizadas.
+
+La verificación posterior confirmó que `GET /api/obrasocial` devuelve 16 y que
+una cuenta de administración hospitalaria puede consultar métricas de los ocho
+hospitales para ese periodo. La API devolvió los totales esperados: 2.600
+ingresos, 2.208 atendidos, 392 no atendidos y 1.716 con pretriage.
+
+El periodo generado fue del 06/10 al 04/11/2026. El backup PostgreSQL previo a
+la carga permanece en EC2 en
+`/opt/pretriage/backups/pre-seed-20261105.XSUICz.sql.gz`, con modo `600`; se
+verificó que el archivo gzip sea legible. El objeto temporal S3 usado para la
+carga se eliminó por su versión exacta.
 
 ## Qué genera
 
@@ -25,7 +46,8 @@ La aplicación de datos queda expresamente diferida por pedido del usuario.
   hospitales, ocho recepcionistas, dieciséis médicos y tres pacientes.
 - Historial completamente ficticio: 30 días hasta ayer en la primera carga,
   con una referencia de 12 consultas diarias por hospital y variación por fecha
-  y fines de semana. Para el 1–30/10/2026 se generan 2.610 consultas, con casos
+  y fines de semana. En la carga AWS del 05/11/2026 se generaron 2.600 consultas
+  para el periodo 06/10–04/11/2026, con casos
   finalizados y cancelados, distintos tiempos de espera, con/sin pretriage y
   revisiones médicas coincidentes o distintas. Se crean hasta 80 pacientes
   históricos por hospital; no son cuentas de Auth0. El periodo y el volumen
@@ -85,7 +107,10 @@ El tenant de Auth0 debe tener habilitada la conexión configurada por
 `demo.pretriage.com.ar` y se crean sin envío de verificación; las políticas del
 tenant pueden impedir iniciar sesión con una cuenta cuyo correo no esté
 verificado. `--verify-logins` comprueba el acceso de las 29 cuentas después de
-aplicar el SQL sin mostrar ni guardar tokens. En AWS usa por defecto
+aplicar el SQL sin mostrar ni guardar tokens. La primera prueba del verificador
+recibió HTTP 403 con el agente genérico de Python; al identificar el cliente
+como `PretriageDemoSeed/1.0`, las 29 cuentas completaron el login por HTTPS y
+devolvieron el subject esperado. En AWS usa por defecto
 `https://api.pretriage.com.ar`; en Docker local usa `http://localhost:8080`.
 `--backend-url` permite indicar otra URL para esa comprobación.
 
@@ -104,9 +129,21 @@ con sus mismos parámetros y estado; no se cambia el hash de sus entradas.
 Por defecto el estado se guarda en
 `target/demo-seed/demo-caba-v1/state.json`, dentro de un directorio protegido e
 ignorado por Git. Incluye contraseñas generadas y Place IDs; no las copies a
-logs, commits ni mensajes. Conservá ese archivo aunque recrees PostgreSQL: así
-el script reutiliza las mismas identidades y contraseñas de Auth0. No borres el
-estado privado al reiniciar o reconstruir la base.
+logs, commits ni mensajes. Para evitar perderlo al limpiar `target`, se guardó
+una copia privada duradera en
+`C:/Users/valen/.pretriage/demo-seed/demo-caba-v1/state.json`, con ACL limitada
+al usuario. Conservá esa copia para reutilizar las mismas identidades y
+contraseñas de Auth0. No borres el estado privado al reiniciar o reconstruir la
+base.
+
+Para futuras ejecuciones desde PowerShell, usá la copia duradera mediante
+`--state-dir`:
+
+```powershell
+python scripts/seed_demo.py --apply --target aws --profile <perfil> `
+  --env-file target/aws-deploy/runtime/.env.aws `
+  --state-dir "$env:USERPROFILE\.pretriage\demo-seed\demo-caba-v1" --verify-logins
+```
 
 Una misma `seed_key` solo puede reutilizarse con la configuración original; el
 hash de entradas evita aplicar datos distintos bajo una clave existente. Repetir
@@ -132,14 +169,13 @@ usá una ubicación de CABA próxima a los establecimientos cargados.
 
 ## Alcance de la verificación
 
-La validación realizada hasta ahora cubrió pruebas aisladas del generador y una
-prueba PostgreSQL desechable de persistencia e idempotencia. También se
-comprobó que el cliente M2M configurado ya obtiene `read:users create:users` y
-que el directorio de credenciales puede restringirse al usuario en Windows.
-No se crearon usuarios
-reales en Auth0 ni cargó datos en la base desplegada. La verificación de inicio
-de sesión con las cuentas demo queda pendiente hasta que se autorice y ejecute
-la carga.
+La validación cubrió pruebas aisladas del generador, una prueba PostgreSQL
+desechable de persistencia e idempotencia, 38 pruebas Python aprobadas y la
+carga real en AWS descrita arriba.
+También se comprobó que el cliente M2M configurado obtiene `read:users
+create:users` y que el directorio de credenciales puede restringirse al usuario
+en Windows. Las 29 cuentas completaron el login HTTP 200 y la comparación de
+subject tras identificar el cliente del verificador.
 
 Comandos de verificación:
 
