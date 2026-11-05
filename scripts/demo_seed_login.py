@@ -21,6 +21,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 LOGIN_TIMEOUT_SECONDS = 15
 MAX_LOGIN_ATTEMPTS = 3
 MAX_RETRY_DELAY_SECONDS = 8.0
+CLIENT_USER_AGENT = "PretriageDemoSeed/1.0"
 
 
 class LoginSmokeError(RuntimeError):
@@ -85,7 +86,8 @@ def _post_login(origin: str, email: str, password: str, *, sleep: Callable[[floa
     request = Request(
         origin + "/api/login",
         data=payload,
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        headers={"Accept": "application/json", "Content-Type": "application/json",
+                 "User-Agent": CLIENT_USER_AGENT},
         method="POST",
     )
     opener = build_opener(_NoRedirect())
