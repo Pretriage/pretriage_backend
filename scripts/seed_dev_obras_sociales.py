@@ -4,45 +4,21 @@ import subprocess
 import sys
 
 
-OBRAS_SOCIALES = (
-    "OSDE",
-    "SWISS MEDICAL",
-    "GALENO",
-    "MEDIFE",
-    "OMINT",
-    "SANCOR SALUD",
-    "ACCORD SALUD",
-    "UNION PERSONAL",
-    "OSECAC",
-    "OSDEPYM",
-    "OSPE",
-    "OSUTHGRA",
-    "OSPERYH",
-    "IOMA",
-    "PAMI",
-    "DOSUBA",
-)
+if __package__:
+    from .demo_seed_catalogs import OBRAS_SOCIALES, build_health_insurance_sql
+else:
+    from demo_seed_catalogs import OBRAS_SOCIALES, build_health_insurance_sql
 
 
 def build_sql():
-    values = ",\n".join("('" + name.replace("'", "''") + "')" for name in OBRAS_SOCIALES)
+    names = ", ".join("'" + name.replace("'", "''") + "'" for name in OBRAS_SOCIALES)
     return f"""
 BEGIN;
 SET LOCAL lock_timeout = '5s';
--- Serialize catalog writers while checking names; no unique-name constraint exists.
-LOCK TABLE obra_social IN SHARE ROW EXCLUSIVE MODE;
-CREATE TEMP TABLE seed_obras_sociales (nombre text) ON COMMIT DROP;
-INSERT INTO seed_obras_sociales (nombre) VALUES {values};
-
-INSERT INTO obra_social (nombre, virgente)
-SELECT seed.nombre, TRUE FROM seed_obras_sociales seed
-WHERE NOT EXISTS (
-    SELECT 1 FROM obra_social existing
-    WHERE upper(btrim(existing.nombre)) = upper(seed.nombre)
-);
+{build_health_insurance_sql()}
 
 SELECT os.id, os.nombre, os.virgente FROM obra_social os
-JOIN seed_obras_sociales seed ON upper(btrim(os.nombre)) = upper(seed.nombre)
+WHERE upper(btrim(os.nombre)) IN ({names})
 ORDER BY os.nombre;
 SELECT count(*) AS obras_sociales_vigentes FROM obra_social WHERE virgente;
 COMMIT;

@@ -17,6 +17,10 @@ La aplicación de datos queda expresamente diferida por pedido del usuario.
   Güemes en Av. Córdoba 3933, cercano al punto del catálogo oficial.
 - Cinco especialidades configuradas por hospital, con un sector y dos salas
   por especialidad.
+- Catálogo compartido de 16 obras sociales: OSDE, SWISS MEDICAL, GALENO, MEDIFE,
+  OMINT, SANCOR SALUD, ACCORD SALUD, UNION PERSONAL, OSECAC, OSDEPYM, OSPE,
+  OSUTHGRA, OSPERYH, IOMA, PAMI y DOSUBA. Lo carga el mismo comando integral;
+  no hace falta ejecutar por separado `seed_dev_obras_sociales.py`.
 - Veintinueve identidades Auth0: un administrador global, un administrador de
   hospitales, ocho recepcionistas, dieciséis médicos y tres pacientes.
 - Historial completamente ficticio: 30 días hasta ayer en la primera carga,
@@ -86,6 +90,16 @@ aplicar el SQL sin mostrar ni guardar tokens. En AWS usa por defecto
 `--backend-url` permite indicar otra URL para esa comprobación.
 
 ## Estado privado e idempotencia
+
+El catálogo de obras sociales se aplica dentro de la misma transacción SQL.
+Compara nombres sin distinguir mayúsculas ni espacios en los extremos y agrega
+solo los faltantes con `virgente=true`; conserva los IDs, nombres, bajas y
+registros ajenos existentes. Comparte catálogo y lógica con el helper local,
+por lo que pueden alternarse sin agregar duplicados. No se crean credenciales,
+planes ni números de afiliado para pacientes con esta carga de catálogo.
+La tabla `obra_social` forma parte del preflight, previo a crear usuarios Auth0.
+Las demos ya generadas pueden incorporar este catálogo al repetir `--apply`
+con sus mismos parámetros y estado; no se cambia el hash de sus entradas.
 
 Por defecto el estado se guarda en
 `target/demo-seed/demo-caba-v1/state.json`, dentro de un directorio protegido e
