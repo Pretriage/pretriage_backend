@@ -40,6 +40,7 @@ class DemoSeedCliTest(unittest.TestCase):
                 self.assertEqual(0, seed_demo.main(["--dry-run", "--state-dir", str(state)]))
             self.assertFalse(state.exists())
             self.assertIn("29 cuentas", output.getvalue())
+            self.assertIn("16 obras sociales", output.getvalue())
 
     def test_conflicting_actions_and_future_history_are_rejected(self):
         with redirect_stderr(io.StringIO()):

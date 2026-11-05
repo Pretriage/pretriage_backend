@@ -30,6 +30,9 @@ class DemoSeedScriptPersistenceTest {
 
     private static final String SEED_KEY = "demo-fixture-v1";
     private static final Pattern ISOLATED_DATABASE = Pattern.compile("(?i)^pretriage_(?:test|seed_test)(?:_|$).*");
+    private static final String SEEDED_OBRAS_SOCIALES = "'OSDE', 'SWISS MEDICAL', 'GALENO', 'MEDIFE', 'OMINT', " +
+            "'SANCOR SALUD', 'ACCORD SALUD', 'UNION PERSONAL', 'OSECAC', 'OSDEPYM', 'OSPE', 'OSUTHGRA', " +
+            "'OSPERYH', 'IOMA', 'PAMI', 'DOSUBA'";
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -40,9 +43,17 @@ class DemoSeedScriptPersistenceTest {
         assertTrue(databaseName != null && ISOLATED_DATABASE.matcher(databaseName).matches(),
                 "Refusing to execute demo fixture SQL outside an isolated pretriage_test database");
 
+        long osdeId = insertObraSocial(" osde ", false);
+        long swissMedicalId = insertObraSocial("sWiSs MeDiCaL", true);
+        long unrelatedObraSocialId = insertObraSocial("Persistence test unrelated obra social", true);
         String sql = fixtureSql();
         executeSql(sql);
         Map<String, Long> firstCounts = registryCounts();
+
+        assertSeededObraSocialCatalog(14L);
+        assertObraSocial(osdeId, " osde ", false);
+        assertObraSocial(swissMedicalId, "sWiSs MeDiCaL", true);
+        assertObraSocial(unrelatedObraSocialId, "Persistence test unrelated obra social", true);
 
         assertEquals(2L, count("SELECT COUNT(*) FROM demo_seed_registry WHERE seed_key = ? AND entity_type = 'hospital'", SEED_KEY));
         assertEquals(5L, count("SELECT COUNT(*) FROM demo_seed_registry WHERE seed_key = ? AND entity_type = 'specialty'", SEED_KEY));
@@ -175,9 +186,16 @@ class DemoSeedScriptPersistenceTest {
 
         jdbc.update("INSERT INTO hospital(nombre, place_id) VALUES (?, ?)",
                 "Unrelated persistence test sentinel", "persistence-test-sentinel");
+        jdbc.update("UPDATE obra_social SET virgente = false WHERE id = ?", seededObraSocialId("PAMI"));
         executeSql(sql);
         Map<String, Long> secondCounts = registryCounts();
         assertEquals(firstCounts, secondCounts, "Re-running the same seed must not add duplicate registered rows");
+        assertSeededObraSocialCatalog(13L);
+        assertObraSocial(osdeId, " osde ", false);
+        assertObraSocial(swissMedicalId, "sWiSs MeDiCaL", true);
+        assertObraSocial(unrelatedObraSocialId, "Persistence test unrelated obra social", true);
+        assertEquals(1L, count("SELECT COUNT(*) FROM obra_social WHERE id = ? AND upper(btrim(nombre)) = 'PAMI' AND virgente = false",
+                seededObraSocialId("PAMI")), "The seed must not reactivate an existing catalog entry");
         assertEquals(firstQueueEntryCount,
                 count("SELECT COUNT(*) FROM demo_seed_registry WHERE seed_key = ? AND entity_type = 'queue_entry'", SEED_KEY));
         assertEquals(1L, count("SELECT COUNT(*) FROM hospital WHERE place_id = 'persistence-test-sentinel'"));
@@ -206,6 +224,8 @@ class DemoSeedScriptPersistenceTest {
     void fixtureDataIsRolledBack() {
         assertEquals(0L, count("SELECT COUNT(*) FROM hospital WHERE place_id = 'persistence-test-sentinel'"));
         assertEquals(0L, count("SELECT COUNT(*) FROM hospital WHERE place_id IN ('demo-fixture-aleman', 'demo-fixture-italiano')"));
+        assertEquals(0L, count("SELECT COUNT(*) FROM obra_social WHERE nombre IN (' osde ', 'sWiSs MeDiCaL', " +
+                "'Persistence test unrelated obra social')"));
         assertEquals(0L, count("SELECT COUNT(*) FROM pg_tables WHERE schemaname = current_schema() AND tablename IN ('demo_seed_runs', 'demo_seed_registry')"));
     }
 
@@ -235,6 +255,34 @@ class DemoSeedScriptPersistenceTest {
     private long count(String sql, Object... args) {
         Long value = jdbc.queryForObject(sql, Long.class, args);
         return value == null ? 0L : value;
+    }
+
+    private long insertObraSocial(String nombre, boolean vigente) {
+        Long id = jdbc.queryForObject("INSERT INTO obra_social(nombre, virgente) VALUES (?, ?) RETURNING id",
+                Long.class, nombre, vigente);
+        return id;
+    }
+
+    private void assertSeededObraSocialCatalog(long expectedNewActive) {
+        assertEquals(16L, count("SELECT COUNT(*) FROM obra_social WHERE upper(btrim(nombre)) IN (" +
+                SEEDED_OBRAS_SOCIALES + ")"), "The seed catalog must contain exactly the 16 normalized names");
+        assertEquals(16L, count("SELECT COUNT(DISTINCT upper(btrim(nombre))) FROM obra_social WHERE upper(btrim(nombre)) IN (" +
+                SEEDED_OBRAS_SOCIALES + ")"), "Each catalog name must occur only once after normalization");
+        assertEquals(expectedNewActive, count("SELECT COUNT(*) FROM obra_social WHERE upper(btrim(nombre)) IN (" +
+                "'GALENO', 'MEDIFE', 'OMINT', 'SANCOR SALUD', 'ACCORD SALUD', 'UNION PERSONAL', 'OSECAC', " +
+                "'OSDEPYM', 'OSPE', 'OSUTHGRA', 'OSPERYH', 'IOMA', 'PAMI', 'DOSUBA') AND virgente = true"),
+                "New catalog entries must be active");
+    }
+
+    private long seededObraSocialId(String normalizedName) {
+        Long id = jdbc.queryForObject("SELECT id FROM obra_social WHERE upper(btrim(nombre)) = ?",
+                Long.class, normalizedName);
+        return id;
+    }
+
+    private void assertObraSocial(long id, String nombre, boolean vigente) {
+        assertEquals(1L, count("SELECT COUNT(*) FROM obra_social WHERE id = ? AND nombre = ? AND virgente = ?",
+                id, nombre, vigente), "Existing obra social row must keep its id, name, and active state");
     }
 
     private record StoredTriageJson(String chatJson, String consultationJson) { }

@@ -19,6 +19,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+if __package__:
+    from .demo_seed_catalogs import OBRAS_SOCIALES
+else:
+    from demo_seed_catalogs import OBRAS_SOCIALES
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "scripts" / "data" / "demo_hospitals_caba.json"
@@ -27,7 +32,7 @@ REQUIRED_TABLES = (
     "sector", "sala", "gestor_de_cola", "usuario_auth", "membresia_hospital",
     "membresia_hospital_rol", "medico", "recepcionista", "paciente",
     "asignacion_medico_hospital", "sesion_atencion_medica", "consulta_medica",
-    "entrada_cola", "atencion_medica", "chat",
+    "entrada_cola", "atencion_medica", "chat", "obra_social",
 )
 
 
@@ -330,6 +335,7 @@ def run(args) -> int:
               "random_seed": args.random_seed}
     start = args.end_date - timedelta(days=args.days - 1)
     print(f"Carga {args.seed_key}: {len(hospitals)} hospitales, 5 especialidades, {len(accounts)} cuentas con acceso")
+    print(f"Catálogo: {len(OBRAS_SOCIALES)} obras sociales; se conservan nombres y bajas existentes")
     print(f"Historial ficticio: {start} a {args.end_date}, referencia {args.daily_per_hospital} consultas/día/hospital")
     print("Hospitales: " + ", ".join(item["name"] for item in hospitals))
     if not (args.apply or args.resolve_places or args.export_sql):

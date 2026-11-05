@@ -275,6 +275,10 @@ remained intact and the patient foreign key was preserved.
 
 ## Local Health Insurance Catalog
 
+The [integral demo seed](31-demo-data-seeding.md) already includes this same
+16-name catalog. Use the standalone helper below only when you want to populate
+the catalog without creating the rest of the demo data.
+
 After the backend has created its schema, populate the catalog used by the
 mobile credential form:
 
