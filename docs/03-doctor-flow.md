@@ -105,6 +105,11 @@ When attention finishes:
 
 The authorized clinical summary and review state are available at
 `GET /api/medico/sesiones/{sesionId}/consultas/{consultaId}/pretriaje`.
+The same response carries `estadoClasificacion`, `cierreParcial` and the literal
+`mensajesConversacion`. If classification closed as `PARCIAL` without a valid AI
+summary, the web shows the transcript in this consultation view and labels the
+queue's initial priority provisional. The doctor still reviews priority through
+the existing workflow; no second consultation or queue entry is created.
 `PUT /api/medico/sesiones/{sesionId}/consultas/{consultaId}/revision-prioridad`
 accepts `CONFIRMAR`, or `CORREGIR` with a required different `prioridad` and an
 optional `motivo` of at most 500 characters. Finalization returns `409` while

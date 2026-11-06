@@ -1,5 +1,7 @@
 # Reintentos acotados de Gemini REST
 
+> Política vigente desde el 5/11/2026: [recuperación automática y cierre parcial](34-automatic-chat-recovery.md). Las referencias siguientes a bloqueos técnicos terminales, `FALLIDA` y reintentos manuales describen comportamientos anteriores.
+
 `GeminiJsonClient` puede repetir una petición REST a `generateContent` ante errores transitorios de transporte y algunos estados HTTP. `max-attempts=2` significa dos intentos HTTP en total por solicitud Gemini, contando la llamada original. Los intentos comparten el presupuesto de esa operación configurado con `pretriage.ia.gemini.request-timeout` (por defecto, 45 segundos), reducido cuando el llamador pasa un `maxWait` menor. Cada intento usa el menor valor entre `attempt-timeout` (20 segundos por defecto) y el tiempo que queda.
 
 Por defecto se permiten dos intentos en total (`max-attempts=2`), con una espera inicial de 500 ms y jitter entre la mitad y una vez y media ese valor. Las esperas crecen exponencialmente hasta cinco segundos antes del jitter. No se inicia otro intento si la espera no cabe en el presupuesto. Los valores se pueden configurar con `GEMINI_MAX_ATTEMPTS`, `GEMINI_ATTEMPT_TIMEOUT` y `GEMINI_RETRY_INITIAL_BACKOFF`; el máximo admitido es cinco intentos y el retroceso inicial admite de cero a cinco segundos.

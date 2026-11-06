@@ -71,7 +71,7 @@ public final class ProgresoEntrevista {
     private static final Pattern CONTRIBUTION_VERB = Pattern.compile("\\b(?:(?:queres|quieres|quieras|deseas|te gustaria|podrias|podes)\\s+)?(?:contar(?:me|nos)?|compartir(?:me)?|agregar|anadir|decir(?:me|nos)?|comentar(?:me)?|mencionar|sumar)\\b");
     private static final Pattern REGISTRATION_OR_CLOSURE = Pattern.compile("\\b(?:registrad[oa]s?|registro|registrar|registrarse|cerrar|cierre|finalizad[oa]s?|finalizar|terminad[oa]s?|terminar)\\b");
     private static final Pattern EMOTION = Pattern.compile("\\b(?:ansiedad|angustia|tristeza|triste|depresion|deprimid[oa]s?|duelo|soledad|desesperanza|malestar emocional|me siento mal emocionalmente|me siento (?:un )?vaci[oa]|la extrano|lo extrano|me dejo|me abandono|nos separamos|perdi a (?:mi|un|una))\\b");
-    private static final String UBICACIONES_DOLOR = "cabeza|pecho|torax|abdomen|estomago|espalda|cuello|garganta|mano|manos|brazo|brazos|pierna|piernas|rodilla|rodillas|diente|dientes|muela|muelas|ojo|ojos|pie|pies";
+    private static final String UBICACIONES_DOLOR = "cabeza|pecho|torax|abdomen|panza|barriga|estomago|espalda|cuello|garganta|mano|manos|brazo|brazos|pierna|piernas|rodilla|rodillas|diente|dientes|muela|muelas|ojo|ojos|pie|pies";
     private static final Pattern LOCATION_PAIN = Pattern.compile("\\b(?:dolor(?:es)?(?:\\s+(?:de|en|del|en el|en la))?|(?:me|te)\\s+duele(?:n)?|duele(?:n)?)\\s+(?:la|el|los|las)?\\s*(" + UBICACIONES_DOLOR + ")\\b");
     private static final Pattern PAIRED_LOCATION_PAIN = Pattern.compile("\\b(?:(?:me|te)\\s+duele(?:n)?|duele(?:n)?|dolor(?:es)?(?:\\s+(?:de|en|del|en el|en la))?)\\s+(?:la|el|los|las|una|un)?\\s*(?:" + UBICACIONES_DOLOR + ")\\s+y\\s+(?:(?:de|en|del|en el|en la)\\s+)?(?:la|el|los|las|una|un)?\\s*(" + UBICACIONES_DOLOR + ")\\b");
     private static final List<SymptomSpec> SYMPTOMS = List.of(
@@ -702,14 +702,24 @@ public final class ProgresoEntrevista {
             return true;
         }
 
+        private boolean uniqueSymptomReference(String text, String symptomId) {
+            if (uniqueSymptom(text, symptomId)) return true;
+            if (!symptomId.startsWith("dolor:") || !uniqueSymptom(text, "dolor:general")) return false;
+            List<String> localizedPainIds = trackers.keySet().stream().map(Clave::sintomaId)
+                    .filter(id -> id.startsWith("dolor:") && !id.equals("dolor:general"))
+                    .distinct().toList();
+            return localizedPainIds.size() == 1 && localizedPainIds.contains(symptomId);
+        }
+
         private boolean applySpontaneous(Hallazgo symptom, String text) {
             boolean changed = false;
             Tracker onset = trackers.get(new Clave(symptom.sintomaId(), Dimension.INICIO));
             String segment = symptom.segmento();
+            boolean uniqueReference = uniqueSymptomReference(text, symptom.sintomaId());
             boolean askedThisOnset = tarea.tipo() == TipoTarea.DATO
                     && tarea.claves().contains(new Clave(symptom.sintomaId(), Dimension.INICIO));
             String time = askedThisOnset ? extractTimeForOnset(segment) : extractTime(segment);
-            if (time == null && uniqueSymptom(text, symptom.sintomaId())) {
+            if (time == null && uniqueReference) {
                 time = askedThisOnset ? extractTimeForOnset(text) : extractTime(text);
             }
             if (time == null && explicitlySharedOnset(text, symptom.sintomaId())) {
@@ -728,18 +738,19 @@ public final class ProgresoEntrevista {
             Dimension severityDimension = symptom.sintomaId().startsWith("dolor:") ? Dimension.INTENSIDAD : Dimension.IMPACTO;
             Tracker severity = trackers.get(new Clave(symptom.sintomaId(), severityDimension));
             if (severity != null && severity.estado != Estado.RESPONDIDO) {
-                String correlatedText = uniqueSymptom(text, symptom.sintomaId()) ? text : segment;
+                String correlatedText = uniqueReference ? text : segment;
                 String functionalImpact = impactValueSpontaneous(correlatedText);
                 if (severity.dimension == Dimension.INTENSIDAD && functionalImpact != null
-                        && (containsSymptomInSegment(text, symptom.sintomaId()) || uniquePain(text, symptom.sintomaId()))) {
+                        && (containsSymptomInSegment(text, symptom.sintomaId()) || uniqueReference
+                            || uniquePain(text, symptom.sintomaId()))) {
                     severity.dimension = Dimension.IMPACTO;
                 }
                 String severityValue = severity.dimension == Dimension.INTENSIDAD
-                        ? painValueSpontaneous(uniqueSymptom(text, symptom.sintomaId())
+                        ? painValueSpontaneous(uniqueReference
                                 || (uniquePain(text, symptom.sintomaId()) && hasExplicitPainScale(text)) ? text : segment)
                         : impactValueSpontaneous(correlatedText);
                 if (severityValue != null && (containsSymptomInSegment(segment, symptom.sintomaId())
-                        || uniqueSymptom(text, symptom.sintomaId()))) {
+                        || uniqueReference)) {
                     severity.set(Estado.RESPONDIDO, severityValue);
                     changed = true;
                 } else if (severityUnknownApplies(text, segment, symptom.sintomaId())) {
@@ -1025,7 +1036,7 @@ public final class ProgresoEntrevista {
             while (pain.find()) {
                 if (!affirmedAt(text, segmentStart + pain.start())) continue;
                 String site = pain.group(1);
-                String id = "dolor:" + site;
+                String id = "dolor:" + canonicalPainSite(site);
                 found.putIfAbsent(id, new Hallazgo(id, "dolor de " + site, false, pain.start(), pain.end(), segment));
             }
             Matcher genericPain = Pattern.compile("\\b(?:cefalea|dolor(?:es)?)\\b").matcher(segment);
@@ -1067,12 +1078,19 @@ public final class ProgresoEntrevista {
             int secondLocationStart = pairedPain.start(1);
             if (!affirmedAt(text, secondLocationStart)) continue;
             String site = pairedPain.group(1);
-            String id = "dolor:" + site;
+            String id = "dolor:" + canonicalPainSite(site);
             String remainder = text.substring(pairedPain.end(1));
             found.putIfAbsent(id, new Hallazgo(id, "dolor de " + site, false,
                     secondLocationStart, pairedPain.end(1), remainder));
         }
         return List.copyOf(found.values());
+    }
+
+    private static String canonicalPainSite(String site) {
+        return switch (site) {
+            case "panza", "barriga" -> "abdomen";
+            default -> site;
+        };
     }
 
     private static boolean affirmed(String text, int start) {
@@ -1150,6 +1168,12 @@ public final class ProgresoEntrevista {
     private static String painValueForAskedScale(String text) {
         String exact = painValue(text);
         if (exact != null) return exact;
+        Matcher qualitativeAnswer = Pattern.compile("^(?:es\\s+)?(?:muy\\s+)?(?:leve|moderad[oa]|fuerte|intens[oa])[.!]?$",
+                Pattern.CASE_INSENSITIVE).matcher(text.strip());
+        if (qualitativeAnswer.matches()) {
+            return text.strip().replaceFirst("(?i)^es\\s+", "").replaceFirst("[.!]$", "")
+                    .toLowerCase(Locale.ROOT);
+        }
         Matcher leading = Pattern.compile("^(?:un\\s+)?(10|[0-9]|cero|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)(?:\\s*(?:/|de|sobre)\\s*10)?(?=$|[,;.!?])").matcher(text.strip());
         return leading.find() ? leading.group(1).toLowerCase(Locale.ROOT) : painValueSpontaneous(text);
     }

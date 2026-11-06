@@ -64,8 +64,8 @@ class ChatClasificacionCierreTest {
         var bad = result(2, false, List.of("dolor toracico"), List.of());
         when(ia.consultar(anyString(), anyString(), eq(true))).thenReturn(bad);
         when(ia.consultarCorreccionFinal(anyString(), anyString(), any())).thenReturn(bad);
-        assertThrows(ProveedorIaException.class, () -> service.enviarMensaje("1", "patient", "Tengo dolor de pecho"));
-        assertEquals(EstadoClasificacionChat.FALLIDA, chat.getEstadoClasificacion());
+        assertDoesNotThrow(() -> service.enviarMensaje("1", "patient", "Tengo dolor de pecho"));
+        assertEquals(EstadoClasificacionChat.PENDIENTE, chat.getEstadoClasificacion());
         assertTrue(chat.isFinalizado()); assertNull(chat.getResultadoTriageJson());
         assertEquals(1, chat.getMensajes().size());
         assertThrows(ChatFinalizadoException.class, () -> service.enviarMensaje("1", "patient", "ok"));
@@ -103,12 +103,14 @@ class ChatClasificacionCierreTest {
         verify(ia, never()).consultarCorreccionFinal(anyString(), anyString(), any());
         verify(cola, times(1)).finalizarTriageEIngresarACola(eq("patient"), any(), anyString(), same(chat));
     }
-    @Test void falloTecnicoNoReintentaAutomaticamenteYConservaEntrevistaCerrada() {
+    @Test void falloTecnicoProgramaRecuperacionAutomaticaYConservaEntrevistaCerrada() {
         when(ia.consultar(anyString(), anyString(), eq(true))).thenThrow(new ProveedorIaException(null));
-        assertThrows(ProveedorIaException.class, () -> service.finalizarEntrevistaVoz("1", "patient",
+        assertDoesNotThrow(() -> service.finalizarEntrevistaVoz("1", "patient",
                 List.of(new TurnoVoz(AutorMensaje.PACIENTE, "Tengo dolor de pecho")), summary()));
-        assertTrue(chat.isFinalizado()); assertEquals(EstadoClasificacionChat.FALLIDA, chat.getEstadoClasificacion());
+        assertTrue(chat.isFinalizado()); assertEquals(EstadoClasificacionChat.PENDIENTE, chat.getEstadoClasificacion());
         assertEquals(1, chat.getMensajes().size());
+        assertTrue(chat.isRecuperacionAutomaticaClasificacion());
+        assertNotNull(chat.getProximoReintentoEn());
         service.registrarCierreVozFallido("1", "patient", List.of(new TurnoVoz(AutorMensaje.PACIENTE, "Tengo dolor de pecho")));
         assertEquals(1, chat.getMensajes().size());
         verify(ia, never()).consultarCorreccionFinal(anyString(), anyString(), any());
@@ -229,10 +231,10 @@ class ChatClasificacionCierreTest {
         doThrow(rechazo).when(ia).consultar(anyString(), anyString(), eq(true));
         doThrow(rechazo).when(ia).consultarCorreccionFinal(anyString(), anyString(), any());
 
-        assertThrows(ProveedorIaException.class, () -> service.enviarMensaje("1", "patient", "No"));
+        assertDoesNotThrow(() -> service.enviarMensaje("1", "patient", "No"));
 
         assertTrue(chat.isFinalizado());
-        assertEquals(EstadoClasificacionChat.FALLIDA, chat.getEstadoClasificacion());
+        assertEquals(EstadoClasificacionChat.PENDIENTE, chat.getEstadoClasificacion());
         assertNull(chat.getResultadoTriageJson());
         assertEquals(1, chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.PACIENTE
                 && m.getContenido().equals("No")).count());
@@ -292,9 +294,9 @@ class ChatClasificacionCierreTest {
         var flujo = new ChatService(repo, mock(RepoPacientes.class), mock(RepoConsultasMedicas.class),
                 mock(RepoEntradasCola.class), cola, boundary, new ObjectMapper());
         when(raw.generar(anyString(), anyString(), any(), any())).thenThrow(new ProveedorIaException(new java.net.http.HttpTimeoutException("timeout")));
-        assertThrows(ProveedorIaException.class, () -> flujo.enviarMensaje("1", "patient", "Tengo dolor de pecho"));
+        assertDoesNotThrow(() -> flujo.enviarMensaje("1", "patient", "Tengo dolor de pecho"));
         assertTrue(chat.isFinalizado());
-        assertEquals(EstadoClasificacionChat.FALLIDA, chat.getEstadoClasificacion());
+        assertEquals(EstadoClasificacionChat.PENDIENTE, chat.getEstadoClasificacion());
         verify(raw, times(1)).generar(anyString(), anyString(), any(), any());
         verifyNoInteractions(cola);
     }

@@ -28,6 +28,50 @@ import static org.mockito.Mockito.*;
 
 class GeminiJsonClientTest {
     @Test
+    void constructoresLegadosConservanTransitorioYNoPromuevenErroresInternosAValidacion() {
+        var timeout = new ProveedorIaException(new HttpTimeoutException("timeout"), true);
+        assertEquals(ProveedorIaException.Categoria.API_NO_DISPONIBLE, timeout.getCategoria());
+        assertTrue(timeout.esTransitorio());
+
+        var rejected = new ProveedorIaException(new IllegalStateException("respuesta rechazada"));
+        assertEquals(ProveedorIaException.Categoria.OPERACION_INTERNA, rejected.getCategoria());
+        assertFalse(rejected.esTransitorio());
+
+        var statusFailure = new ProveedorIaException(new IllegalStateException("HTTP 503"),
+                ProveedorIaException.Categoria.API_NO_DISPONIBLE, 503, Duration.ofSeconds(30));
+        var wrapped = new ProveedorIaException(statusFailure);
+        assertEquals(ProveedorIaException.Categoria.API_NO_DISPONIBLE, wrapped.getCategoria());
+        assertEquals(503, wrapped.getStatusHttp());
+        assertEquals(Duration.ofSeconds(30), wrapped.getRetryAfter());
+    }
+
+    @Test
+    void constructorLegacyRecorreCausasTipadasTransporteTlsYPreservaMetadata() {
+        var timeout = new ProveedorIaException(new java.util.concurrent.CompletionException(
+                new java.net.http.HttpTimeoutException("timeout")));
+        assertEquals(ProveedorIaException.Categoria.API_NO_DISPONIBLE, timeout.getCategoria());
+        assertTrue(timeout.isApiNoDisponible());
+
+        var socketTimeout = new ProveedorIaException(new RuntimeException("wrapper",
+                new java.net.SocketTimeoutException("socket timeout")));
+        assertTrue(socketTimeout.isApiNoDisponible());
+
+        var tls = new ProveedorIaException(new RuntimeException("wrapper", new SSLHandshakeException("cert failure")));
+        assertEquals(ProveedorIaException.Categoria.CONFIGURACION, tls.getCategoria());
+
+        var explicit = new ProveedorIaException(new IllegalStateException("safe"),
+                ProveedorIaException.Categoria.API_NO_DISPONIBLE, 503, Duration.ofSeconds(12));
+        var nested = new ProveedorIaException(new RuntimeException("outer", new java.util.concurrent.CompletionException(explicit)));
+        assertEquals(ProveedorIaException.Categoria.API_NO_DISPONIBLE, nested.getCategoria());
+        assertEquals(503, nested.getStatusHttp());
+        assertEquals(Duration.ofSeconds(12), nested.getRetryAfter());
+
+        var optedOut = new ProveedorIaException(new java.net.SocketTimeoutException("timeout"), false);
+        assertEquals(ProveedorIaException.Categoria.OPERACION_INTERNA, optedOut.getCategoria());
+        assertFalse(optedOut.isApiNoDisponible());
+    }
+
+    @Test
     void correccionRespetaElPlazoRestanteSinAmpliarElTimeoutConfigurado() throws Exception {
         when(response.statusCode()).thenReturn(200);
         when(response.body()).thenReturn("{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"{}\"}]}}]}");
@@ -105,25 +149,33 @@ class GeminiJsonClientTest {
     }
 
     @Test
-    void cuotaAgotadaNoReintentaNiExponeElCuerpo() throws Exception {
+    void cuotaAgotadaConUnIntentoConfiguradoNoReintentaNiExponeElCuerpo() throws Exception {
         when(response.statusCode()).thenReturn(429);
         when(http.<String>send(any(), any())).thenReturn(response);
-        var error = assertThrows(ProveedorIaException.class, () -> client.generar("sistema", "prueba", schema()));
+        var singleAttempt = client(new GeminiChatProperties("test-key", "gemini-3.5-flash-lite",
+                "https://example.invalid/v1beta", Duration.ofSeconds(1), Duration.ofSeconds(2), 8192,
+                1, Duration.ofSeconds(1), Duration.ofMillis(50)));
+        var error = assertThrows(ProveedorIaException.class, () -> singleAttempt.generar("sistema", "prueba", schema()));
+        assertEquals(ProveedorIaException.Categoria.API_NO_DISPONIBLE, error.getCategoria());
+        assertTrue(error.isApiNoDisponible());
+        assertTrue(error.esTransitorio());
+        assertEquals(429, error.getStatusHttp());
+        assertNull(error.getRetryAfter());
         assertTrue(error.getCause().getMessage().contains("429"));
         verify(response, never()).body();
         verify(http, times(1)).send(any(), any());
     }
 
     @Test
-    void status429ConRetryAfterInvalidoONegativoNoReintenta() throws Exception {
+    void status429ConRetryAfterInvalidoONegativoUsaBackoffAcotado() throws Exception {
         for (String retryAfter : new String[]{"mañana", "-1"}) {
             clearInvocations(http);
             sleeps.clear();
             var rateLimited = response(429, Map.of("Retry-After", List.of(retryAfter)));
             when(http.<String>send(any(), any())).thenReturn(rateLimited);
             assertThrows(ProveedorIaException.class, () -> client.generar("sistema", "prueba", schema()));
-            verify(http, times(1)).send(any(), any());
-            assertTrue(sleeps.isEmpty());
+            verify(http, times(2)).send(any(), any());
+            assertEquals(List.of(Duration.ofMillis(500)), sleeps);
         }
     }
 
@@ -136,7 +188,61 @@ class GeminiJsonClientTest {
                 "{\"candidates\":[{\"finishReason\":\"SAFETY\"}]}",
                 "{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[]}}]}"}) {
             when(response.body()).thenReturn(body);
-            assertThrows(ProveedorIaException.class, () -> client.generar("sistema", "prueba", schema()));
+            var error = assertThrows(ProveedorIaException.class,
+                    () -> client.generar("sistema", "prueba", schema()));
+            assertEquals(ProveedorIaException.Categoria.VALIDACION_RESPUESTA, error.getCategoria());
+            assertFalse(error.isApiNoDisponible());
+        }
+    }
+
+    @Test
+    void respuestaJsonMalformadaEsValidacionYNoIndisponibilidad() throws Exception {
+        when(response.statusCode()).thenReturn(200);
+        when(response.body()).thenReturn("{no-es-json");
+        when(http.<String>send(any(), any())).thenReturn(response);
+
+        var error = assertThrows(ProveedorIaException.class,
+                () -> client.generar("sistema", "prueba", schema()));
+
+        assertEquals(ProveedorIaException.Categoria.VALIDACION_RESPUESTA, error.getCategoria());
+        assertNull(error.getStatusHttp());
+        assertFalse(error.isApiNoDisponible());
+    }
+
+    @Test
+    void estadosDeApiIndisponibleRetienenStatusYRetryAfterCuandoElPlazoAgota() throws Exception {
+        for (int status : new int[]{408, 500, 502, 503, 504, 429}) {
+            clearInvocations(http);
+            sleeps.clear();
+            var unavailable = response(status, Map.of("Retry-After", List.of("1")));
+            when(http.<String>send(any(), any())).thenReturn(unavailable);
+            var bounded = client(new GeminiChatProperties("test-key", "gemini-3.5-flash-lite",
+                    "https://example.invalid/v1beta", Duration.ofSeconds(1), Duration.ofMillis(40), 8192,
+                    2, Duration.ofMillis(20), Duration.ofMillis(50)));
+
+            var error = assertThrows(ProveedorIaException.class,
+                    () -> bounded.generar("sistema", "prueba", schema()));
+
+            assertEquals(ProveedorIaException.Categoria.API_NO_DISPONIBLE, error.getCategoria(), "HTTP " + status);
+            assertTrue(error.isApiNoDisponible(), "HTTP " + status);
+            assertEquals(status, error.getStatusHttp(), "HTTP " + status);
+            assertEquals(Duration.ofSeconds(1), error.getRetryAfter(), "HTTP " + status);
+            verify(http, times(1)).send(any(), any());
+        }
+    }
+
+    @Test
+    void rechazosDeAutenticacionYConfiguracionNoSonIndisponibilidad() throws Exception {
+        for (int status : new int[]{400, 401, 403, 404}) {
+            clearInvocations(http);
+            var authFailure = response(status, Map.of());
+            when(http.<String>send(any(), any())).thenReturn(authFailure);
+            var error = assertThrows(ProveedorIaException.class,
+                    () -> client.generar("sistema", "prueba", schema()));
+            assertEquals(ProveedorIaException.Categoria.CONFIGURACION, error.getCategoria(), "HTTP " + status);
+            assertFalse(error.isApiNoDisponible(), "HTTP " + status);
+            assertEquals(status, error.getStatusHttp(), "HTTP " + status);
+            verify(http, times(1)).send(any(), any());
         }
     }
 
@@ -308,6 +414,8 @@ class GeminiJsonClientTest {
             var error = assertThrows(ProveedorIaException.class,
                     () -> client.generar("sistema", "prueba", schema()));
             assertFalse(error.getCause().getMessage().contains("certificate detail"));
+            assertEquals(ProveedorIaException.Categoria.CONFIGURACION, error.getCategoria());
+            assertFalse(error.isApiNoDisponible());
             verify(http, times(1)).send(any(), any());
         }
     }

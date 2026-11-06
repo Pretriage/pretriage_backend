@@ -552,6 +552,38 @@ class ProgresoEntrevistaTest {
     }
 
     @Test
+    void muyIntensoRespondeSoloLaIntensidadDeDolorCuandoLaPreguntaLaContextualiza() {
+        var progreso = ProgresoEntrevista.evaluar(turnos(
+                p("Me duele la cabeza y tengo fiebre"),
+                b("¿Qué tan intenso es el dolor de cabeza?"),
+                p("Muy intenso")));
+        assertEquals(Estado.RESPONDIDO,
+                dato(progreso, "dolor:cabeza", ProgresoEntrevista.Dimension.INTENSIDAD).estado());
+        assertEquals("muy intenso",
+                dato(progreso, "dolor:cabeza", ProgresoEntrevista.Dimension.INTENSIDAD).valor());
+        assertEquals(Estado.PENDIENTE,
+                dato(progreso, "fiebre", ProgresoEntrevista.Dimension.TEMPERATURA).estado());
+
+        var negada = ProgresoEntrevista.evaluar(turnos(
+                p("Me duele la cabeza"),
+                b("¿Qué tan intenso es el dolor de cabeza?"),
+                p("No es muy intenso")));
+        assertEquals(Estado.PENDIENTE,
+                dato(negada, "dolor:cabeza", ProgresoEntrevista.Dimension.INTENSIDAD).estado());
+
+        var sinPregunta = ProgresoEntrevista.evaluar(turnos(p("Me duele la cabeza"), p("Muy intenso")));
+        assertEquals(Estado.PENDIENTE,
+                dato(sinPregunta, "dolor:cabeza", ProgresoEntrevista.Dimension.INTENSIDAD).estado());
+
+        var ambiguo = ProgresoEntrevista.evaluar(turnos(
+                p("Me duele la cabeza y la espalda"), p("Muy intenso")));
+        assertEquals(Estado.PENDIENTE,
+                dato(ambiguo, "dolor:cabeza", ProgresoEntrevista.Dimension.INTENSIDAD).estado());
+        assertEquals(Estado.PENDIENTE,
+                dato(ambiguo, "dolor:espalda", ProgresoEntrevista.Dimension.INTENSIDAD).estado());
+    }
+
+    @Test
     void numeroAisladoDeUnaReferenciaAMessiNoCompletaLaEscala() {
         var espontaneo = ProgresoEntrevista.evaluar(turnos(p("Me duele la cabeza, 8 Messi")));
         assertEquals(ProgresoEntrevista.Estado.PENDIENTE,
@@ -626,8 +658,11 @@ class ProgresoEntrevistaTest {
     @Test
     void reconoceIniciosColoquialesYNoCreaSintomasNegadosNiDuplicadosPorCausa() {
         var mareo = ProgresoEntrevista.evaluar(turnos(p("Tengo dolor de panza y mareo desde hace un rato")));
+        assertEquals(Estado.PENDIENTE,
+                dato(mareo, "dolor:abdomen", ProgresoEntrevista.Dimension.INICIO).estado());
         assertEquals(Estado.RESPONDIDO,
                 dato(mareo, "sintoma:mareos", ProgresoEntrevista.Dimension.INICIO).estado());
+        assertTrue(mareo.datos().stream().noneMatch(d -> d.sintomaId().equals("dolor:general")));
 
         var amanecer = ProgresoEntrevista.evaluar(turnos(p("Tengo tos desde el amanecer")));
         assertEquals(Estado.RESPONDIDO,
@@ -647,14 +682,14 @@ class ProgresoEntrevistaTest {
     }
 
     @Test
-    void respuestasEspontaneasResuelvenInicioDolorGeneralYTemperaturaNoMedida() {
-        var dolorGeneral = ProgresoEntrevista.evaluar(turnos(
+    void respuestasEspontaneasResuelvenInicioDolorAbdominalYTemperaturaNoMedida() {
+        var dolorAbdominal = ProgresoEntrevista.evaluar(turnos(
                 p("Dolor de panza y mareo desde hace un rato"),
                 p("El dolor empezó suave ayer, intensidad 6")));
         assertEquals(Estado.RESPONDIDO,
-                dato(dolorGeneral, "dolor:general", ProgresoEntrevista.Dimension.INICIO).estado());
+                dato(dolorAbdominal, "dolor:abdomen", ProgresoEntrevista.Dimension.INICIO).estado());
         assertEquals(Estado.RESPONDIDO,
-                dato(dolorGeneral, "dolor:general", ProgresoEntrevista.Dimension.INTENSIDAD).estado());
+                dato(dolorAbdominal, "dolor:abdomen", ProgresoEntrevista.Dimension.INTENSIDAD).estado());
 
         var noMedidaDuranteInicio = ProgresoEntrevista.evaluar(turnos(
                 p("Tengo dolor de cabeza y fiebre"),
@@ -678,9 +713,9 @@ class ProgresoEntrevistaTest {
                 b("Del 0 al 10, ¿cuánto te duele?"),
                 p("No sé bien la intensidad; el dolor empezó suave ayer pero hoy me molesta más")));
         assertEquals(Estado.RESPONDIDO,
-                dato(noSe, "dolor:general", ProgresoEntrevista.Dimension.INICIO).estado());
+                dato(noSe, "dolor:abdomen", ProgresoEntrevista.Dimension.INICIO).estado());
         assertEquals(Estado.DESCONOCIDO,
-                dato(noSe, "dolor:general", ProgresoEntrevista.Dimension.INTENSIDAD).estado());
+                dato(noSe, "dolor:abdomen", ProgresoEntrevista.Dimension.INTENSIDAD).estado());
     }
 
     @Test
@@ -1181,6 +1216,61 @@ class ProgresoEntrevistaTest {
     }
 
     @Test
+    void recuperaDolorColoquialTrasRedireccionFueraDeContexto() {
+        for (String wording : List.of("Me duele la panza.", "Me duele la barriga.")) {
+            var inicial = ProgresoEntrevista.evaluar(turnos(p(wording)));
+            assertTrue(inicial.tieneHechosClinicos(), wording);
+            assertTrue(inicial.datos().stream().anyMatch(d -> d.sintomaId().equals("dolor:abdomen")), wording);
+            assertEquals(ProgresoEntrevista.TipoObjetivo.DATO, inicial.objetivoDelTurno().tipo(), wording);
+        }
+
+        var progreso = ProgresoEntrevista.evaluarConContexto(List.of(
+                bt("Hola, ¿qué te está pasando?"),
+                pt("Prueba de navegación QA 0511: no es una consulta real.", true),
+                bt("Puedo ayudarte con una consulta de salud. ¿Qué te está pasando?"),
+                pt("Me duele la panza.", false)));
+
+        assertTrue(progreso.tieneHechosClinicos());
+        assertTrue(progreso.datos().stream().anyMatch(d -> d.sintomaId().equals("dolor:abdomen")));
+        assertEquals(ProgresoEntrevista.TipoObjetivo.DATO, progreso.objetivoDelTurno().tipo());
+        assertEquals(ProgresoEntrevista.Dimension.INICIO, progreso.objetivoDelTurno().dimension());
+
+        var negado = ProgresoEntrevista.evaluar(turnos(p("No me duele la panza.")));
+        assertFalse(negado.datos().stream().anyMatch(d -> d.sintomaId().startsWith("dolor:")));
+
+        var soloBot = ProgresoEntrevista.evaluar(turnos(b("Me duele la panza.")));
+        assertTrue(soloBot.datos().isEmpty());
+
+        var excluido = ProgresoEntrevista.evaluarConContexto(List.of(pt("Me duele la panza.", true)));
+        assertFalse(excluido.tieneHechosClinicos());
+        assertTrue(excluido.datos().isEmpty());
+
+        var generico = ProgresoEntrevista.evaluar(turnos(p("Tengo dolor de panza.")));
+        assertTrue(generico.datos().stream().anyMatch(d -> d.sintomaId().equals("dolor:abdomen")));
+        assertFalse(generico.datos().stream().anyMatch(d -> d.sintomaId().equals("dolor:general")));
+
+        for (String wording : List.of("Me duele la panza y la barriga.", "Me duele la barriga y la panza.")) {
+            var pareado = ProgresoEntrevista.evaluar(turnos(p(wording)));
+            assertEquals(1, pareado.datos().stream().map(ProgresoEntrevista.Dato::sintomaId).distinct().count(), wording);
+            assertTrue(pareado.datos().stream().anyMatch(d -> d.sintomaId().equals("dolor:abdomen")), wording);
+        }
+
+        var aliases = ProgresoEntrevista.evaluar(turnos(
+                p("Me duele la panza desde ayer"),
+                b("Del 1 al 10, ¿cuánto te duele la barriga?"),
+                p("5 de 10"),
+                p("También me duele el abdomen.")));
+        assertEquals(1, aliases.datos().stream().map(ProgresoEntrevista.Dato::sintomaId).distinct().count());
+        assertEquals(2, aliases.datos().size());
+        assertEquals(Estado.RESPONDIDO,
+                dato(aliases, "dolor:abdomen", ProgresoEntrevista.Dimension.INICIO).estado());
+        assertEquals("desde ayer", dato(aliases, "dolor:abdomen", ProgresoEntrevista.Dimension.INICIO).valor());
+        assertEquals(Estado.RESPONDIDO,
+                dato(aliases, "dolor:abdomen", ProgresoEntrevista.Dimension.INTENSIDAD).estado());
+        assertEquals("5", dato(aliases, "dolor:abdomen", ProgresoEntrevista.Dimension.INTENSIDAD).valor());
+    }
+
+    @Test
     void aclaracionAbiertaNoReemplazaElObjetivoDeUnDatoPendiente() {
         var progreso = ProgresoEntrevista.evaluar(turnos(
                 p("Tengo tos"), b("¿Desde cuándo empezó la tos?"), p("Messi 8"),
@@ -1364,6 +1454,18 @@ class ProgresoEntrevistaTest {
         assertEquals(ProgresoEntrevista.MotivoCierre.LIMITE_RECURSOS, progreso.motivoCierre());
         assertTrue(progreso.puedeCerrar());
         assertTrue(progreso.datos().stream().anyMatch(d -> d.estado() == ProgresoEntrevista.Estado.PENDIENTE));
+    }
+
+    @Test
+    void referenciaGenericaNoAsignaDatosAUnDolorLocalizadoSiHayVarios() {
+        var progreso = ProgresoEntrevista.evaluar(turnos(
+                p("Me duele la cabeza y la panza"),
+                p("El dolor empezó ayer, intensidad 6")));
+
+        for (String id : List.of("dolor:cabeza", "dolor:abdomen")) {
+            assertEquals(Estado.PENDIENTE, dato(progreso, id, ProgresoEntrevista.Dimension.INICIO).estado());
+            assertEquals(Estado.PENDIENTE, dato(progreso, id, ProgresoEntrevista.Dimension.INTENSIDAD).estado());
+        }
     }
 
     private static ProgresoEntrevista.Dato dato(ProgresoEntrevista progreso, String id,

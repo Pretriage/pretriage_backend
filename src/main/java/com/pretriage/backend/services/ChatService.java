@@ -17,9 +17,11 @@ import com.pretriage.backend.model.chat.AutorMensaje;
 import com.pretriage.backend.model.chat.Chat;
 import com.pretriage.backend.model.chat.Mensaje;
 import com.pretriage.backend.model.chat.EstadoClasificacionChat;
+import com.pretriage.backend.model.chat.EstadoRecuperacionChat;
 import com.pretriage.backend.model.consultas.ConsultaMedica;
 import com.pretriage.backend.model.consultas.EntradaCola;
 import com.pretriage.backend.model.consultas.EstadoEntradaCola;
+import com.pretriage.backend.model.consultas.EstadoConsulta;
 import com.pretriage.backend.model.consultas.NivelDeGravedad;
 import com.pretriage.backend.model.personas.Paciente;
 import com.pretriage.backend.repositories.RepoChat;
@@ -123,6 +125,8 @@ public class ChatService {
     private PlatformTransactionManager transactionManager;
     @Autowired(required = false)
     private ObjectProvider<ChatService> selfProvider;
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
 
     public ChatService(RepoChat repoChat,
                        RepoPacientes repoPacientes,
@@ -166,9 +170,12 @@ public class ChatService {
 
         validarSinAtencionPendiente(paciente);
         cerrarChatsAbiertos(idPaciente);
+        validarSinAtencionPendiente(paciente);
 
         Chat chat = new Chat(paciente);
+        consultaActual(paciente).ifPresent(c -> chat.setConsultaOrigenId(c.getId()));
         chat.agregarMensaje(new Mensaje(MENSAJE_INICIAL, AutorMensaje.BOT, null));
+        chat.avanzarVersionEstado();
         repoChat.save(chat);
         return MapperChat.toDTO(chat);
     }
@@ -190,7 +197,21 @@ public class ChatService {
         if (chatsAbiertos.isEmpty()) {
             return;
         }
-        chatsAbiertos.forEach(chatAbierto -> chatAbierto.setFinalizado(true));
+        chatsAbiertos.stream().sorted(java.util.Comparator.comparing(Chat::getId)).forEach(anterior -> {
+            Chat chatAbierto = repoChat.findForUpdate(anterior.getId(), idPaciente).orElseThrow(ChatNoEncontradoException::new);
+            if (entityManager != null) entityManager.refresh(chatAbierto, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+            if (chatAbierto.isFinalizado()) return;
+            chatAbierto.setFinalizado(true);
+            chatAbierto.setTurnoTextoEnCurso(false);
+            chatAbierto.setEstadoTurnoTexto(com.pretriage.backend.model.chat.EstadoTurnoTexto.COMPLETADA);
+            if (chatAbierto.getResultadoTriageJson() == null && chatAbierto.getMensajes().stream()
+                    .anyMatch(m -> m.getAutor() == AutorMensaje.PACIENTE)) {
+                chatAbierto.setCierreParcial(true);
+                chatAbierto.setEstadoClasificacion(EstadoClasificacionChat.PARCIAL);
+            }
+            limpiarRecuperacion(chatAbierto);
+            chatAbierto.avanzarVersionEstado();
+        });
         repoChat.saveAll(chatsAbiertos);
     }
 
@@ -239,14 +260,18 @@ public class ChatService {
             throw new IllegalStateException("El turno de texto no está pendiente");
         }
         Mensaje mensajePaciente = chat.getMensajes().stream()
-                .filter(m -> m.getAutor() == AutorMensaje.PACIENTE)
-                .reduce((first, last) -> last)
+                .filter(m -> m.getAutor() == AutorMensaje.PACIENTE && solicitudId.equals(m.getSolicitudId()))
+                .findFirst()
                 .orElseThrow(() -> new IllegalStateException("No hay turno de paciente persistido"));
+        if (chat.isFinalizado()) throw new ChatFinalizadoException();
+        validarConsultaVigente(chat, idPaciente);
         ChatTurnResponse response = procesarTurnoTexto(chat, idPaciente, mensajePaciente, true);
         chat.setEstadoTurnoTexto(com.pretriage.backend.model.chat.EstadoTurnoTexto.COMPLETADA);
         chat.setTurnoTextoEnCurso(false);
         chat.setTurnoTextoIniciadoEn(null);
         chat.setErrorTurnoTexto(null);
+        if (chat.getEstadoClasificacion() != EstadoClasificacionChat.PENDIENTE) limpiarRecuperacion(chat);
+        chat.avanzarVersionEstado();
         repoChat.save(chat);
         return response;
     }
@@ -274,6 +299,10 @@ public class ChatService {
             }
             clasificacionSolicitada = cierreRequerido;
             if (cierreRequerido) iniciarClasificacion(chat);
+            if (cierreRequerido && turnoPersistido) {
+                prepararClasificacionDurable(chat, false);
+                return new ChatTurnResponse(null, null, "PROCESAMIENTO_PENDIENTE");
+            }
             long inicioConsulta = System.nanoTime();
             TriageAiResponse respuesta;
             java.util.Optional<TriageIaClient.MotivoCorreccionFinal> rechazoSemantico = java.util.Optional.empty();
@@ -313,18 +342,11 @@ public class ChatService {
             }
             return registrarRespuestaBot(chat, idPaciente, respuesta, "GEMINI", progreso, null);
         } catch (RuntimeException error) {
-            if (clasificacionSolicitada && error instanceof ProveedorIaException) {
-                ProveedorIaException proveedorError = (ProveedorIaException) error;
-                if (proveedorError.esTransitorio()) {
-                    chat.setFinalizado(true);
-                    chat.setEstadoClasificacion(EstadoClasificacionChat.PENDIENTE);
-                    chat.setRecuperacionAutomaticaClasificacion(!turnoPersistido);
-                    chat.setClasificacionAutomaticaVoz(false);
-                    if (!turnoPersistido) chat.setIntentosClasificacionAutomaticos(1);
-                    if (!turnoPersistido) scheduleAutomaticRetryAfterCommit(String.valueOf(chat.getId()), idPaciente, false);
-                } else {
-                    marcarClasificacionFallida(chat);
-                }
+            if (clasificacionSolicitada) {
+                prepararClasificacionDurable(chat, false);
+                chat.setIntentosClasificacionAutomaticos(1);
+                registrarFalloClasificacion(chat, error, 5000, 30000);
+                return new ChatTurnResponse(null, null, "PROCESAMIENTO_PENDIENTE");
             } else if (!turnoPersistido) {
                 // An unfinished interview still permits retrying an undelivered answer.
                 chat.getMensajes().remove(mensajePaciente);
@@ -339,13 +361,35 @@ public class ChatService {
      */
     @Transactional
     public void registrarTurnosVoz(String idChat, String idPaciente, List<TurnoVoz> turnos) {
-        Chat chat = buscarChatPropio(idChat, idPaciente);
+        Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente).orElseThrow(ChatNoEncontradoException::new);
         validarTurnoTextoBloqueadoParaVoz(chat);
         if (chat.isFinalizado()) {
             throw new ChatFinalizadoException();
         }
         agregarTurnosVoz(chat, turnos);
+        chat.avanzarVersionEstado();
         repoChat.save(chat);
+    }
+
+    /** Leaving voice mode is not an interview closure or an ASR confirmation boundary. */
+    @Transactional
+    public void guardarVozInterrumpidaSinFinalizar(String idChat, String idPaciente,
+                                                   List<TurnoVoz> confirmados, String fragmento) {
+        Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente).orElseThrow(ChatNoEncontradoException::new);
+        if (chat.isFinalizado()) return;
+        validarTurnoTextoBloqueadoParaVoz(chat);
+        validarConsultaVigente(chat, idPaciente);
+        agregarTurnosVoz(chat, confirmados);
+        agregarFragmentoVozExcluido(chat, fragmento);
+        chat.avanzarVersionEstado();
+        repoChat.save(chat);
+    }
+
+    private void agregarFragmentoVozExcluido(Chat chat, String fragmento) {
+        if (fragmento == null || fragmento.isBlank()) return;
+        Mensaje parcial = new Mensaje(fragmento.trim(), AutorMensaje.PACIENTE, chat.getPaciente());
+        parcial.setExcluidoDelTriage(true);
+        chat.agregarMensaje(parcial);
     }
 
     /**
@@ -415,119 +459,40 @@ public class ChatService {
             }
             agregarTurnosVoz(chat, turnos == null ? List.of() : turnos);
             iniciarClasificacion(chat);
-            chat.setRecuperacionAutomaticaClasificacion(true);
-            chat.setClasificacionAutomaticaVoz(true);
-            chat.setIntentosClasificacionAutomaticos(0);
-            chat.setClasificacionAutomaticaEnCurso(false);
+            chat.setCierreParcial(cierreYaConfirmado);
+            prepararClasificacionDurable(chat, true);
             repoChat.save(chat);
         });
     }
 
     private ChatTurnResponse ejecutarRecuperacionVoz(String idChat, String idPaciente,
                                                       ResumenEntrevistaVoz resumen) {
-        try {
-            return recoveryCoordinator.ejecutar(idChat,
-                    (numero, presupuesto) -> {
-                        try {
-                            return ejecutarIntentoClasificacionVoz(idChat, idPaciente, resumen, presupuesto);
-                        } catch (RuntimeException error) {
-                            liberarIntentoVoz(idChat, idPaciente);
-                            throw error;
-                        }
-                    },
-                    () -> reservarIntentoVoz(idChat, idPaciente));
-        } catch (RuntimeException error) {
-            if (error instanceof ClasificacionVozRecoveryCoordinator.EnCursoException) throw error;
-            enTransaccion(() -> {
-                Chat chat = buscarChatPropio(idChat, idPaciente);
-                if (chat.getEstadoClasificacion() == EstadoClasificacionChat.PENDIENTE
-                        && chat.isRecuperacionAutomaticaClasificacion()) {
-                    marcarClasificacionFallida(chat);
-                    chat.setRecuperacionAutomaticaClasificacion(false);
-                    repoChat.save(chat);
-                }
-            });
-            throw error;
-        }
-    }
-
-    private ChatTurnResponse ejecutarIntentoClasificacionVoz(String idChat, String idPaciente,
-                                                              ResumenEntrevistaVoz resumen,
-                                                              java.time.Duration presupuesto) {
-        return enTransaccion(() -> {
-            Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente)
-                    .orElseThrow(ChatNoEncontradoException::new);
-            if (chat.getEstadoClasificacion() == EstadoClasificacionChat.COMPLETADA) {
-                return respuestaFinalExistente(chat);
-            }
+        // Try once immediately; all later attempts are durable and never sleep in the WS worker.
+        Integer intento = enTransaccion(() -> {
+            Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente).orElseThrow(ChatNoEncontradoException::new);
             if (chat.getEstadoClasificacion() != EstadoClasificacionChat.PENDIENTE
-                    || !chat.isRecuperacionAutomaticaClasificacion()) {
-                throw new IllegalStateException("La clasificación automática ya no está pendiente");
-            }
-            ProgresoEntrevista progreso = progresoEntrevista(chat);
-            List<TurnoVoz> entrevistaCompleta = mensajesLiteralesVoz(chat).stream()
-                    .map(m -> new TurnoVoz(m.getAutor(), m.getContenido())).toList();
-            String datos = construirDatosVozParaClasificacion(entrevistaCompleta, resumen);
-            long inicio = System.nanoTime();
-            boolean verificarAlcanceAdministrativo = candidatoCierreSinDatos(progreso);
-            if (verificarAlcanceAdministrativo) {
-                EstadoEntradaChat alcance = triageIaClient.consultarAlcance(datos,
-                        plazoRestante(inicio, chat, presupuesto));
-                if (alcance != EstadoEntradaChat.RELEVANTE) return cerrarSinHechosClinicos(chat, progreso);
-            }
-            TriageAiResponse respuesta;
-            java.util.Optional<TriageIaClient.MotivoCorreccionFinal> rechazoSemantico = java.util.Optional.empty();
-            try {
-                respuesta = verificarAlcanceAdministrativo
-                        ? triageIaClient.consultar(promptFinal(progreso, true), datos, true,
-                                plazoRestante(inicio, chat, presupuesto))
-                        : triageIaClient.consultar(promptFinal(progreso, true), datos, true, presupuesto);
-            } catch (ProveedorIaException error) {
-                rechazoSemantico = TriageIaClient.motivoCorreccionFinal(error);
-                if (rechazoSemantico.isEmpty() && !TriageIaClient.esErrorDeRespuesta(error)) throw error;
-                respuesta = null;
-            } catch (RuntimeException error) {
-                throw error instanceof ProveedorIaException ? error : new ProveedorIaException(error);
-            }
-            respuesta = corregirClasificacionSiHaceFalta(chat, respuesta, datos, inicio, rechazoSemantico,
-                    promptFinal(progreso, true), presupuesto);
-            if (estadoEntrada(respuesta) != EstadoEntradaChat.RELEVANTE) {
-                throw new ProveedorIaException(new IllegalStateException(
-                        "La clasificación final contradice el preflight de alcance de la entrevista de voz"));
-            }
-            chat.setRecuperacionAutomaticaClasificacion(false);
-            chat.setClasificacionAutomaticaEnCurso(false);
-            return registrarRespuestaBot(chat, idPaciente, respuesta, "GEMINI", progreso,
-                    progreso.puedeCerrar() ? null : "CIERRE_PREVIO");
-        });
-    }
-
-    private int reservarIntentoVoz(String idChat, String idPaciente) {
-        return enTransaccion(() -> {
-            Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente)
-                    .orElseThrow(ChatNoEncontradoException::new);
-            if (chat.getEstadoClasificacion() != EstadoClasificacionChat.PENDIENTE
-                    || !chat.isRecuperacionAutomaticaClasificacion()) return 0;
-            if (chat.isClasificacionAutomaticaEnCurso()) return -1;
-            int intentos = chat.getIntentosClasificacionAutomaticos();
-            if (intentos >= ClasificacionVozRecoveryCoordinator.MAX_INTENTOS) return 0;
-            chat.setIntentosClasificacionAutomaticos(intentos + 1);
+                    || !chat.isRecuperacionAutomaticaClasificacion() || chat.isClasificacionAutomaticaEnCurso()) return 0;
+            chat.setIntentosClasificacionAutomaticos(chat.getIntentosClasificacionAutomaticos() + 1);
             chat.setClasificacionAutomaticaEnCurso(true);
-            repoChat.save(chat);
-            return intentos + 1;
+            chat.setClasificacionIniciadaEn(java.time.LocalDateTime.now());
+            chat.setProximoReintentoEn(null);
+            chat.avanzarVersionEstado();
+            return chat.getIntentosClasificacionAutomaticos();
         });
-    }
-
-    private void liberarIntentoVoz(String idChat, String idPaciente) {
-        enTransaccion(() -> {
-            Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente)
-                    .orElseThrow(ChatNoEncontradoException::new);
-            if (chat.getEstadoClasificacion() == EstadoClasificacionChat.PENDIENTE
-                    && chat.isRecuperacionAutomaticaClasificacion()) {
-                chat.setClasificacionAutomaticaEnCurso(false);
-                repoChat.save(chat);
+        if (intento != null && intento > 0) {
+            try {
+                ChatService service = selfProvider == null ? this : selfProvider.getObject();
+                return service.procesarClasificacionDurable(idChat, idPaciente, intento);
+            } catch (RuntimeException error) {
+                enTransaccion(() -> {
+                    Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente).orElseThrow(ChatNoEncontradoException::new);
+                    if (chat.getEstadoClasificacion() != EstadoClasificacionChat.PENDIENTE
+                            || chat.getIntentosClasificacionAutomaticos() != intento) return;
+                    registrarFalloClasificacion(chat, error, 5000, 30000);
+                });
             }
-        });
+        }
+        return new ChatTurnResponse(null, null, "PROCESAMIENTO_PENDIENTE");
     }
 
     private ChatTurnResponse respuestaFinalExistente(Chat chat) {
@@ -547,64 +512,6 @@ public class ChatService {
         enTransaccion(() -> { operation.run(); return null; });
     }
 
-    private void scheduleAutomaticRetryAfterCommit(String chatId, String patientId, boolean voice) {
-        Runnable retry = () -> java.util.concurrent.CompletableFuture.runAsync(() -> {
-            try {
-                if (voice) ejecutarRecuperacionVoz(chatId, patientId, null);
-                else {
-                    ChatService service = selfProvider == null ? this : selfProvider.getObject();
-                    service.reintentarClasificacionAutomaticaTexto(chatId, patientId);
-                }
-            } catch (RuntimeException error) {
-                log.warn("Automatic classification recovery stopped chatId={} reason={}", chatId,
-                        error instanceof ProveedorIaException ? "provider_failure" : "processing_failure");
-            }
-        });
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override public void afterCommit() { retry.run(); }
-            });
-        } else {
-            retry.run();
-        }
-    }
-
-    /** Recover only jobs explicitly owned by this workflow; legacy FALLIDA chats stay untouched. */
-    @EventListener(ApplicationReadyEvent.class)
-    public void recuperarClasificacionesVozPendientes() {
-        java.util.concurrent.CompletableFuture.runAsync(this::recuperarClasificacionesVozPendientesEnWorker);
-    }
-
-    private void recuperarClasificacionesVozPendientesEnWorker() {
-        for (Object[] candidate : repoChat.findAutomaticClassificationRecoveryCandidates(
-                EstadoClasificacionChat.PENDIENTE)) {
-            String chatId = String.valueOf(candidate[0]);
-            String patientId = String.valueOf(candidate[1]);
-            boolean voice = Boolean.TRUE.equals(candidate[2]);
-            try {
-                enTransaccion(() -> {
-                    Chat chat = repoChat.findForUpdate(Long.valueOf(chatId), patientId)
-                            .orElseThrow(ChatNoEncontradoException::new);
-                    if (chat.getEstadoClasificacion() == EstadoClasificacionChat.PENDIENTE
-                            && chat.isRecuperacionAutomaticaClasificacion()) {
-                        chat.setClasificacionAutomaticaEnCurso(false);
-                        repoChat.save(chat);
-                    }
-                });
-                if (voice) ejecutarRecuperacionVoz(chatId, patientId, null);
-                else {
-                    ChatService service = selfProvider == null ? this : selfProvider.getObject();
-                    service.reintentarClasificacionAutomaticaTexto(chatId, patientId);
-                }
-            } catch (ClasificacionVozRecoveryCoordinator.EnCursoException ignored) {
-                // Another worker already owns this durable job.
-            } catch (RuntimeException error) {
-                log.warn("Automatic classification recovery stopped chatId={} reason={}", chatId,
-                        error instanceof ProveedorIaException ? "provider_failure" : "processing_failure");
-            }
-        }
-    }
-
     /** Close a failed voice interview exactly once, including failures before the provider call. */
     @Transactional
     public void registrarCierreVozFallido(String idChat, String idPaciente, List<TurnoVoz> turnos) {
@@ -612,12 +519,180 @@ public class ChatService {
         validarTurnoTextoBloqueadoParaVoz(chat);
         if (chat.isFinalizado()) return;
         agregarTurnosVoz(chat, turnos == null ? List.of() : turnos);
-        marcarClasificacionFallida(chat);
+        chat.setCierreParcial(true);
+        prepararClasificacionDurable(chat, true);
+        repoChat.save(chat);
+    }
+
+    /** Retains an interrupted Live turn without ever classifying an open ASR fragment. */
+    @Transactional
+    public ChatDTO recuperarVozInterrumpida(String idChat, String idPaciente, List<TurnoVoz> confirmados,
+                                           String fragmento, boolean agotado, ProveedorIaException fallo) {
+        Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente).orElseThrow(ChatNoEncontradoException::new);
+        if (chat.isFinalizado()) return MapperChat.toDTO(chat);
+        validarTurnoTextoBloqueadoParaVoz(chat);
+        validarConsultaVigente(chat, idPaciente);
+        agregarTurnosVoz(chat, confirmados == null ? List.of() : confirmados);
+        agregarFragmentoVozExcluido(chat, fragmento);
+        if (agotado || (fallo != null && fallo.getCategoria() == ProveedorIaException.Categoria.CONFIGURACION)) {
+            cerrarParcialEntrevista(chat, true);
+        } else {
+            Mensaje pendiente = null;
+            for (Mensaje mensaje : chat.getMensajes()) {
+                if (Boolean.TRUE.equals(mensaje.getExcluidoDelTriage())) continue;
+                if (mensaje.getAutor() == AutorMensaje.PACIENTE) pendiente = mensaje;
+                else if (mensaje.getAutor() == AutorMensaje.BOT) pendiente = null;
+            }
+            if (pendiente != null) {
+                if (pendiente.getSolicitudId() == null) pendiente.setSolicitudId(java.util.UUID.randomUUID().toString());
+                chat.setSolicitudTurnoTextoId(pendiente.getSolicitudId());
+                chat.setIntentosTurnoTexto(0);
+                chat.setFallosInternosTurnoTexto(fallo != null && fallo.isApiNoDisponible() ? 0 : 1);
+                chat.setTurnoTextoEnCurso(false);
+                boolean api = fallo != null && fallo.isApiNoDisponible();
+                chat.setEstadoTurnoTexto(api ? com.pretriage.backend.model.chat.EstadoTurnoTexto.NO_DISPONIBLE
+                        : com.pretriage.backend.model.chat.EstadoTurnoTexto.PENDIENTE);
+                chat.setEstadoRecuperacion(api ? EstadoRecuperacionChat.ESPERANDO_API : EstadoRecuperacionChat.REINTENTANDO);
+                java.time.Duration demora = api ? java.time.Duration.ofSeconds(30) : java.time.Duration.ofSeconds(2);
+                if (api && fallo.getRetryAfter() != null && fallo.getRetryAfter().compareTo(demora) > 0) demora = fallo.getRetryAfter();
+                chat.setProximoReintentoEn(java.time.LocalDateTime.now().plus(demora));
+                chat.setFallosDisponibilidad(api ? 1 : 0);
+            } else if (fallo != null && !fallo.isApiNoDisponible()) {
+                cerrarParcialEntrevista(chat, true);
+            }
+        }
+        chat.avanzarVersionEstado();
+        repoChat.save(chat);
+        return MapperChat.toDTO(chat);
     }
 
     private void iniciarClasificacion(Chat chat) {
         chat.setFinalizado(true);
         chat.setEstadoClasificacion(EstadoClasificacionChat.PENDIENTE);
+    }
+
+    private Optional<ConsultaMedica> consultaActual(Paciente paciente) {
+        return repoConsultasMedicas.findFirstByPacienteIdAndEstadoConsultaIn(paciente.getId(),
+                EnumSet.complementOf(EnumSet.of(EstadoConsulta.PENDIENTE,
+                        EstadoConsulta.CANCELADA, EstadoConsulta.FINALIZADA)));
+    }
+
+    private void validarConsultaVigente(Chat chat, String idPaciente) {
+        var ultimo = repoChat.findFirstByPacienteUsuarioAuthIdOrderByFechaHoraCreacionDescIdDesc(idPaciente);
+        if (ultimo.isPresent() && !ultimo.get().getId().equals(chat.getId())) throw new ChatFinalizadoException();
+        if (chat.getConsultaOrigenId() == null) {
+            consultaActual(chat.getPaciente()).filter(c -> c.getFechaHoraCreacion() == null
+                    || chat.getFechaHoraCreacion() == null
+                    || !c.getFechaHoraCreacion().isAfter(chat.getFechaHoraCreacion()))
+                    .ifPresent(c -> chat.setConsultaOrigenId(c.getId()));
+        } else {
+            ConsultaMedica consulta = repoConsultasMedicas.findById(chat.getConsultaOrigenId())
+                    .orElseThrow(ChatFinalizadoException::new);
+            if (consulta.getEstadoConsulta() == EstadoConsulta.CANCELADA
+                    || consulta.getEstadoConsulta() == EstadoConsulta.FINALIZADA
+                    || !consulta.getPaciente().getId().equals(chat.getPaciente().getId())) throw new ChatFinalizadoException();
+        }
+    }
+
+    private void prepararClasificacionDurable(Chat chat, boolean voz) {
+        iniciarClasificacion(chat);
+        chat.setRecuperacionAutomaticaClasificacion(true);
+        chat.setClasificacionAutomaticaVoz(voz);
+        chat.setIntentosClasificacionAutomaticos(0);
+        chat.setFallosInternosClasificacion(0);
+        chat.setClasificacionAutomaticaEnCurso(false);
+        chat.setClasificacionIniciadaEn(null);
+        chat.setEstadoRecuperacion(EstadoRecuperacionChat.REINTENTANDO);
+        chat.setProximoReintentoEn(java.time.LocalDateTime.now());
+        chat.setFallosDisponibilidad(0);
+        chat.avanzarVersionEstado();
+    }
+
+    static void limpiarRecuperacion(Chat chat) {
+        chat.setEstadoRecuperacion(EstadoRecuperacionChat.SIN_RECUPERACION);
+        chat.setProximoReintentoEn(null);
+        chat.setClasificacionAutomaticaEnCurso(false);
+        chat.setClasificacionIniciadaEn(null);
+        chat.setRecuperacionAutomaticaClasificacion(false);
+        chat.setFallosDisponibilidad(0);
+    }
+
+    void registrarFalloClasificacion(Chat chat, RuntimeException error, long demoraInterna, long demoraApi) {
+        chat.setClasificacionAutomaticaEnCurso(false);
+        chat.setClasificacionIniciadaEn(null);
+        if (RecuperacionChatPolicy.api(error)) RecuperacionChatPolicy.programar(chat, error, demoraInterna, demoraApi);
+        else {
+            chat.setFallosInternosClasificacion(chat.getFallosInternosClasificacion() + 1);
+            if (RecuperacionChatPolicy.configuracion(error) || chat.getFallosInternosClasificacion() >= 2) marcarParcial(chat);
+            else RecuperacionChatPolicy.programar(chat, error, demoraInterna, demoraApi);
+        }
+        chat.avanzarVersionEstado();
+        repoChat.save(chat);
+    }
+
+    /** Called with the row lock held after the bounded text budget is exhausted. */
+    void cerrarParcialTexto(Chat chat) {
+        cerrarParcialEntrevista(chat, false);
+    }
+
+    private void cerrarParcialEntrevista(Chat chat, boolean voz) {
+        chat.setCierreParcial(true);
+        chat.setEstadoTurnoTexto(com.pretriage.backend.model.chat.EstadoTurnoTexto.COMPLETADA);
+        chat.setTurnoTextoEnCurso(false);
+        chat.setTurnoTextoIniciadoEn(null);
+        if (hayTurnoPacienteIncluido(chat)) prepararClasificacionDurable(chat, voz);
+        else marcarParcial(chat);
+    }
+
+    /** Terminal processing outcome, never an invented TriageResultDTO or queue update. */
+    void marcarParcial(Chat chat) {
+        chat.setFinalizado(true);
+        chat.setCierreParcial(true);
+        chat.setEstadoClasificacion(EstadoClasificacionChat.PARCIAL);
+        chat.setResultadoTriageJson(null);
+        limpiarRecuperacion(chat);
+        vincularConsultaParcial(chat);
+        chat.avanzarVersionEstado();
+    }
+
+    private void vincularConsultaParcial(Chat chat) {
+        Optional<ConsultaMedica> candidata = chat.getConsultaOrigenId() == null
+                ? consultaActual(chat.getPaciente()) : repoConsultasMedicas.findById(chat.getConsultaOrigenId());
+        Optional<ConsultaMedica> consulta = candidata.flatMap(c -> bloquearConsulta(c.getId()));
+        consulta.filter(c -> c.getEstadoConsulta() != EstadoConsulta.CANCELADA
+                        && c.getEstadoConsulta() != EstadoConsulta.FINALIZADA)
+                .filter(c -> c.getPaciente().getId().equals(chat.getPaciente().getId()))
+                .filter(c -> c.getChat() == null || c.getChat().getId().equals(chat.getId()))
+                .filter(c -> c.getFechaHoraCreacion() == null || chat.getFechaHoraCreacion() == null
+                        || !c.getFechaHoraCreacion().isAfter(chat.getFechaHoraCreacion()))
+                .ifPresent(c -> { c.setChat(chat); repoConsultasMedicas.save(c); });
+    }
+
+    private Optional<ConsultaMedica> bloquearConsulta(Long id) {
+        return repoConsultasMedicas.findByIdForUpdate(id).map(consulta -> {
+            if (entityManager != null) entityManager.refresh(consulta, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+            return consulta;
+        });
+    }
+
+    /** Enrol only active legacy failures, preserving the original message and request ID. */
+    @Transactional
+    public boolean recuperarTurnoLegacy(String idChat, String idPaciente) {
+        Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente).orElseThrow(ChatNoEncontradoException::new);
+        if (chat.isFinalizado() || chat.isRecuperacionLegacyAplicada()
+                || chat.getEstadoTurnoTexto() != com.pretriage.backend.model.chat.EstadoTurnoTexto.NO_DISPONIBLE
+                || chat.getSolicitudTurnoTextoId() == null) return false;
+        validarConsultaVigente(chat, idPaciente);
+        if (chat.getConsultaOrigenId() == null) return false;
+        chat.setRecuperacionLegacyAplicada(true);
+        chat.setFallosInternosTurnoTexto(0);
+        chat.setTurnoTextoEnCurso(false);
+        chat.setTurnoTextoIniciadoEn(null);
+        chat.setEstadoTurnoTexto(com.pretriage.backend.model.chat.EstadoTurnoTexto.PENDIENTE);
+        chat.setEstadoRecuperacion(EstadoRecuperacionChat.REINTENTANDO);
+        chat.setProximoReintentoEn(java.time.LocalDateTime.now());
+        chat.avanzarVersionEstado();
+        return true;
     }
 
     private void validarTurnoTextoBloqueadoParaVoz(Chat chat) {
@@ -645,9 +720,9 @@ public class ChatService {
     private ChatTurnResponse cerrarSinHechosClinicos(Chat chat, ProgresoEntrevista progreso) {
         chat.setFinalizado(true);
         chat.setEstadoClasificacion(EstadoClasificacionChat.NO_SOLICITADA);
-        chat.setRecuperacionAutomaticaClasificacion(false);
-        chat.setClasificacionAutomaticaEnCurso(false);
+        limpiarRecuperacion(chat);
         chat.setResultadoTriageJson(null);
+        chat.avanzarVersionEstado();
         log.info("Chat closed without classification chatId={} reason={} clasificacion=false",
                 chat.getId(), progreso.motivoCierre().name());
         Mensaje respuesta = new Mensaje(
@@ -775,55 +850,30 @@ public class ChatService {
         return procesarClasificacionCerrada(chat, idPaciente);
     }
 
-    /** Backend-only retry for text closes, atomically consuming the final workflow attempt. */
-    public ChatTurnResponse reintentarClasificacionAutomaticaTexto(String idChat, String idPaciente) {
-        boolean reservado = enTransaccion(() -> {
-            Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente)
-                    .orElseThrow(ChatNoEncontradoException::new);
-            if (chat.getEstadoClasificacion() != EstadoClasificacionChat.PENDIENTE
-                    || !chat.isRecuperacionAutomaticaClasificacion() || chat.isClasificacionAutomaticaVoz()
-                    || chat.isClasificacionAutomaticaEnCurso()) throw new ChatFinalizadoException();
-            if (chat.getIntentosClasificacionAutomaticos() >= ClasificacionVozRecoveryCoordinator.MAX_INTENTOS) {
-                marcarClasificacionFallida(chat);
-                return false;
-            }
-            chat.setIntentosClasificacionAutomaticos(ClasificacionVozRecoveryCoordinator.MAX_INTENTOS);
-            chat.setClasificacionAutomaticaEnCurso(true);
-            repoChat.save(chat);
-            return true;
-        });
-        if (!reservado) return null;
-        ChatService service = selfProvider == null ? this : selfProvider.getObject();
-        try {
-            return service.procesarClasificacionAutomaticaTextoReservada(idChat, idPaciente);
-        } catch (RuntimeException error) {
-            enTransaccion(() -> {
-                Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente)
-                        .orElseThrow(ChatNoEncontradoException::new);
-                if (chat.getEstadoClasificacion() == EstadoClasificacionChat.PENDIENTE
-                        && chat.isRecuperacionAutomaticaClasificacion()) marcarClasificacionFallida(chat);
-            });
-            throw error;
-        }
-    }
-
-    @Transactional(noRollbackFor = ProveedorIaException.class)
-    public ChatTurnResponse procesarClasificacionAutomaticaTextoReservada(String idChat, String idPaciente) {
+    /** Executes exactly the durable claim reserved by the recovery worker. */
+    @Transactional
+    public ChatTurnResponse procesarClasificacionDurable(String idChat, String idPaciente, int intento) {
         Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente)
                 .orElseThrow(ChatNoEncontradoException::new);
         if (chat.getEstadoClasificacion() != EstadoClasificacionChat.PENDIENTE
-                || !chat.isRecuperacionAutomaticaClasificacion() || chat.isClasificacionAutomaticaVoz()
-                || !chat.isClasificacionAutomaticaEnCurso()
-                || chat.getIntentosClasificacionAutomaticos() != ClasificacionVozRecoveryCoordinator.MAX_INTENTOS) {
-            throw new ChatFinalizadoException();
-        }
+                || !chat.isRecuperacionAutomaticaClasificacion() || !chat.isClasificacionAutomaticaEnCurso()
+                || chat.getIntentosClasificacionAutomaticos() != intento) throw new ChatFinalizadoException();
+        validarConsultaVigente(chat, idPaciente);
         return procesarClasificacionCerrada(chat, idPaciente);
     }
 
+    /** Compatibility entry points use the same worker claim rather than a second retry budget. */
+    public ChatTurnResponse reintentarClasificacionAutomaticaTexto(String idChat, String idPaciente) {
+        Chat chat = buscarChatPropio(idChat, idPaciente);
+        return procesarClasificacionDurable(idChat, idPaciente, chat.getIntentosClasificacionAutomaticos());
+    }
+
+    public ChatTurnResponse procesarClasificacionAutomaticaTextoReservada(String idChat, String idPaciente) {
+        return reintentarClasificacionAutomaticaTexto(idChat, idPaciente);
+    }
+
     private ChatTurnResponse procesarClasificacionCerrada(Chat chat, String idPaciente) {
-        Chat ultimo = repoChat.findFirstByPacienteUsuarioAuthIdOrderByFechaHoraCreacionDescIdDesc(idPaciente)
-                .orElseThrow(ChatNoEncontradoException::new);
-        if (!ultimo.getId().equals(chat.getId())) throw new ChatFinalizadoException();
+        validarConsultaVigente(chat, idPaciente);
         ProgresoEntrevista progreso = progresoEntrevista(chat);
         boolean verificarAlcanceAdministrativo = candidatoCierreSinDatos(progreso);
         long inicio = System.nanoTime();
@@ -836,13 +886,15 @@ public class ChatService {
                     return cerrarSinHechosClinicos(chat, progreso);
                 }
             }
-            String promptFinal = promptFinal(progreso, false);
+            String promptFinal = promptFinal(progreso, chat.isClasificacionAutomaticaVoz());
             TriageAiResponse respuesta;
             java.util.Optional<TriageIaClient.MotivoCorreccionFinal> rechazoSemantico = java.util.Optional.empty();
             try {
                 respuesta = verificarAlcanceAdministrativo
                         ? triageIaClient.consultar(promptFinal, datos, true, plazoRestante(inicio, chat))
-                        : triageIaClient.consultar(promptFinal, datos, true);
+                        : chat.isClasificacionAutomaticaVoz()
+                            ? triageIaClient.consultar(promptFinal, datos, true, java.time.Duration.ofSeconds(45))
+                            : triageIaClient.consultar(promptFinal, datos, true);
             } catch (ProveedorIaException error) {
                 rechazoSemantico = TriageIaClient.motivoCorreccionFinal(error);
                 if (rechazoSemantico.isEmpty() && !TriageIaClient.esErrorDeRespuesta(error)) throw error;
@@ -855,18 +907,16 @@ public class ChatService {
             }
             String motivoCierre = progreso.motivoCierre() == ProgresoEntrevista.MotivoCierre.EN_CURSO
                     ? "CIERRE_PREVIO" : null;
-            chat.setRecuperacionAutomaticaClasificacion(false);
-            chat.setClasificacionAutomaticaEnCurso(false);
             return registrarRespuestaBot(chat, idPaciente, respuesta, "GEMINI", progreso, motivoCierre);
         } catch (ProveedorIaException error) {
-            marcarClasificacionFallida(chat);
-            throw new ProveedorIaException(error);
+            if (!chat.isRecuperacionAutomaticaClasificacion()) marcarClasificacionFallida(chat);
+            throw error;
         }
     }
 
     private ProveedorIaException respuestaIaInvalida(Chat chat, String reason) {
         log.warn("Chat IA rejected chatId={} reason={}", chat.getId(), reason);
-        return new ProveedorIaException(new IllegalStateException("Gemini devolvio una respuesta de chat no aceptable"));
+        return new ProveedorIaException(new IllegalStateException("Gemini devolvio una respuesta de chat no aceptable"), ProveedorIaException.Categoria.VALIDACION_RESPUESTA);
     }
 
     private ChatTurnResponse registrarRespuestaBot(Chat chat,
@@ -895,14 +945,26 @@ public class ChatService {
             String resultadoJson = escribirResultado(resultadoConPrioridad, origenRespuesta, progreso,
                     motivoCierreOverride);
             chat.setResultadoTriageJson(resultadoJson);
-            atencionEstimada = atencionHospitalService.finalizarTriageEIngresarACola(
-                    idPaciente,
-                    nivelDeGravedadDesdePrioridad(resultadoConPrioridad.nivelPrioridad()),
-                    resultadoJson,
-                    chat);
+            ConsultaMedica origen = chat.getConsultaOrigenId() == null ? null
+                    : bloquearConsulta(chat.getConsultaOrigenId()).orElseThrow(ChatFinalizadoException::new);
+            if (origen != null && (origen.getEstadoConsulta() == EstadoConsulta.CANCELADA
+                    || origen.getEstadoConsulta() == EstadoConsulta.FINALIZADA)) throw new ChatFinalizadoException();
+            if (origen != null && origen.getEstadoConsulta() == EstadoConsulta.EN_ATENCION) {
+                // A late AI result may enrich the record, never reinsert a patient already being seen.
+                origen.setChat(chat);
+                origen.setResumenPretriageJson(resultadoJson);
+                origen.setNivelDeGravedadBot(nivelDeGravedadDesdePrioridad(resultadoConPrioridad.nivelPrioridad()));
+                repoConsultasMedicas.save(origen);
+            } else {
+                atencionEstimada = atencionHospitalService.finalizarTriageEIngresarACola(
+                        idPaciente, nivelDeGravedadDesdePrioridad(resultadoConPrioridad.nivelPrioridad()),
+                        resultadoJson, chat);
+            }
             chat.setEstadoClasificacion(EstadoClasificacionChat.COMPLETADA);
+            limpiarRecuperacion(chat);
         }
 
+        chat.avanzarVersionEstado();
         repoChat.save(chat);
         return new ChatTurnResponse(
                 MapperMensaje.toDTO(mensajeBot),

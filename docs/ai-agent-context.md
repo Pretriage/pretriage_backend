@@ -115,20 +115,19 @@ A terminal `CIERRE_SIN_DATOS` response has no classification or queue update;
 clients synchronize the closed chat and must not infer COMPLETADA from closure.
 Complete interviews request final classification and reject a provider response
 that keeps asking questions. Chat never generates local questions or classification.
-Final model JSON/schema errors can request one bounded correction. Transient REST
-failures use [bounded retries](19-gemini-retries.md), two HTTP attempts per invocation
-by default; all calls and corrections share the operation's 45-second budget.
-Do not automatically resend mobile POST messages or replay Live audio.
-Unfinished text-turn failures remove the undelivered patient message;
-classification failures after closure preserve answers with `finalizado=true`.
-New voice jobs commit `PENDIENTE` before external work and automatically recover
-typed transient faults, with at most two persisted attempts. Final text transient
-faults schedule the remaining attempt after commit. Exhausted/permanent faults
-leave `FALLIDA`; current mobile has no reprocessing button. Both modalities share
-final-result validation and one bounded semantic correction. Compatibility retry
-`POST /api/chat/{id}/clasificacion` adds no patient message and accepts only the
-latest `FALLIDA` chat, never an in-flight `PENDIENTE` job. See
-[the current closure/recovery contract](23-server-owned-voice-closure.md).
+Final model JSON/schema errors can request one bounded correction. Current recovery
+uses [the durable policy](34-automatic-chat-recovery.md): internal generation or
+validation failures use up to two workflow executions per phase; typed transient API
+outages use persisted backoff until recovery or consultation invalidation. Historical
+details remain in [Gemini REST retries](19-gemini-retries.md). Do not automatically
+resend mobile POST messages or replay Live audio. Unfinished text-turn failures remove
+the undelivered patient message; accepted closure preserves answers and attempts
+classification from the available facts. If no valid result is obtained, the chat
+closes as `PARCIAL` with no AI priority. New work does not end in `FALLIDA`; the
+legacy `POST /api/chat/{id}/clasificacion` retains handling for historical `FALLIDA`
+chats only. Both modalities share final-result validation. See
+[server-owned closure](23-server-owned-voice-closure.md) and the current recovery
+contract.
 Reception form fallback remains active in `AdmisionRecepcionService`. Preserve
 valid final AI classifications instead of overwriting them with local rules.
 Immediate-attention final messages must include the result's safety recommendation.
@@ -145,11 +144,14 @@ Chat lifecycle and consultation link:
   patient's previous open chats (`RepoChat.findAllByPacienteUsuarioAuthIdAndFinalizadoFalse`),
   keeping at most one open chat. The validation runs before closing, so a rejection
   has no side effects.
-- `ConsultaMedica.chat` (`@OneToOne`, FK `consulta_medica.id_chat`, unique) is set
-  only when the bot finalizes the triage:
-  `AtencionHospitalService.finalizarTriageEIngresarACola(auth0Id, nivel, resumenJson, chat)`
-  (2/3-arg overloads keep `chat = null`). "Pretriage realizado" = `ConsultaMedica.chat IS NOT NULL`;
-  reception admissions and aborted/cancelled chats are "no realizado".
+- `ConsultaMedica.chat` (`@OneToOne`, FK `consulta_medica.id_chat`, unique) links the
+  chatbot interview to the existing selected-hospital consultation after either a
+  valid completed classification or a partial closure. A partial closure reuses the
+  consultation and queue entry; it does not create a second one. "Pretriage realizado" counts a `COMPLETADA`
+  classification or a legacy null state with a non-null AI result; partial, failed,
+  pending, reception-only and unlinked consultations are "no realizado". Bot severity
+  metrics include `SIN_CLASIFICACION_IA` for arrivals without a valid AI classification,
+  so a provisional `NORMAL` priority is not reported as an AI result.
 
 ### Hospital Metrics
 
@@ -170,8 +172,8 @@ Chat lifecycle and consultation link:
 Contract rules: everything is anchored on `EntradaCola.fechaHoraIngreso` of the hospital in range;
 `pacientesAtendidos` = those with `AtencionMedica.FINALIZADA`; wait = `fechaHoraInicio - fechaHoraIngreso`
 averaged in Java (no dialect-specific JPQL date math); percentages and waits rounded to 1 decimal
-and `null` when the denominator is 0; `distribucionGravedadBot` always has the 5 `NivelDeGravedad`
-values in declaration order and `distribucionGravedadMedico` the same 5 + `SIN_REVISION` last;
+and `null` when the denominator is 0; `distribucionGravedadBot` has the 5 `NivelDeGravedad`
+values in declaration order plus `SIN_CLASIFICACION_IA`, and `distribucionGravedadMedico` the same 5 + `SIN_REVISION` last;
 `serieDiaria` has one zero-filled item per day `desde..hasta`. Invariants:
 `pacientesNoAtendidos = ingresaronACola - pacientesAtendidos`,
 `pretriageRealizado + pretriageNoRealizado = ingresaronACola`, each distribution sums to
@@ -313,7 +315,7 @@ Full tests need Docker Desktop access.
 - Text messages use `TextoTurnoService`: accept once with a stable UUID, return
   `202 ChatDTO`, then poll GET. Durable `estadoTurnoTexto` is independent of
   `estadoClasificacion`. Never replay POST to recover a lost response. A pending
-  or unavailable text turn blocks text and voice; automatic retries are bounded.
+  or unavailable text turn blocks text and voice; automatic recovery is server-owned.
   See `docs/24-durable-text-turns.md` before changing this lifecycle.
 
 ## Documentation Maintenance

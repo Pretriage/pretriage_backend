@@ -213,7 +213,7 @@ class ChatHardeningTest {
     }
 
     @Test
-    void clasificacionDeVozQueContradiceUnPreflightAceptadoQuedaFallidaSinEncolar() {
+    void clasificacionDeVozContradictoriaProgramaRecuperacionSinEncolar() {
         Flujo flujo = new Flujo();
         flujo.chat.agregarMensaje(new Mensaje("Me duele la cabeza", AutorMensaje.PACIENTE,
                 flujo.chat.getPaciente()));
@@ -225,11 +225,11 @@ class ChatHardeningTest {
         when(flujo.provider.consultar(anyString(), anyString(), eq(true)))
                 .thenReturn(new TriageAiResponse(false, "", null, EstadoEntradaChat.FUERA_DE_CONTEXTO));
 
-        assertThrows(ProveedorIaException.class, () -> flujo.service.finalizarEntrevistaVoz(
+        assertDoesNotThrow(() -> flujo.service.finalizarEntrevistaVoz(
                 CHAT_ID, PACIENTE_ID, turnos, resumenVoz()));
 
         assertTrue(flujo.chat.isFinalizado());
-        assertEquals(EstadoClasificacionChat.FALLIDA, flujo.chat.getEstadoClasificacion());
+        assertEquals(EstadoClasificacionChat.PENDIENTE, flujo.chat.getEstadoClasificacion());
         assertNull(flujo.chat.getResultadoTriageJson());
         assertEquals(2, flujo.chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.PACIENTE).count());
         verify(flujo.provider).consultar(anyString(), anyString(), eq(true));

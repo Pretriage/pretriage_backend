@@ -13,6 +13,8 @@ public final class MapperChat {
                 chat.getMensajes().stream().map(MapperMensaje::toDTO).toList(),
                 chat.getFechaHoraCreacion(),
                 chat.isFinalizado(), chat.getEstadoClasificacion(), chat.getEstadoTurnoTexto(),
-                chat.getSolicitudTurnoTextoId(), chat.getIntentosTurnoTexto());
+                chat.getSolicitudTurnoTextoId(), chat.getIntentosTurnoTexto(), chat.isCierreParcial(),
+                chat.getEstadoRecuperacion(), chat.getProximoReintentoEn() == null ? null
+                        : chat.getProximoReintentoEn().atZone(java.time.ZoneId.systemDefault()).toInstant(), chat.getVersionEstado());
     }
 }

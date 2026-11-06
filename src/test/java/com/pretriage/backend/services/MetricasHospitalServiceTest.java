@@ -116,15 +116,17 @@ class MetricasHospitalServiceTest {
 
         MetricasHospitalResponse r = service.obtenerMetricas(ADMIN, HOSPITAL, DESDE, HASTA);
 
-        List<String> ordenBot = List.of("RIESGO_VITAL_INMEDIATO", "MUY_URGENTE", "URGENTE", "NORMAL", "NO_URGENTE");
+        List<String> ordenGravedad = List.of("RIESGO_VITAL_INMEDIATO", "MUY_URGENTE", "URGENTE", "NORMAL", "NO_URGENTE");
+        List<String> ordenBot = new ArrayList<>(ordenGravedad);
+        ordenBot.add("SIN_CLASIFICACION_IA");
         assertEquals(ordenBot, r.distribucionGravedadBot().stream().map(DistribucionNivelItem::nivel).toList());
-        List<String> ordenMedico = new ArrayList<>(ordenBot);
+        List<String> ordenMedico = new ArrayList<>(ordenGravedad);
         ordenMedico.add("SIN_REVISION");
         assertEquals(ordenMedico, r.distribucionGravedadMedico().stream().map(DistribucionNivelItem::nivel).toList());
 
-        assertEquals(List.of(3L, 7L, 20L, 22L, 8L),
+        assertEquals(List.of(3L, 7L, 20L, 22L, 8L, 0L),
                 r.distribucionGravedadBot().stream().map(DistribucionNivelItem::cantidad).toList());
-        assertEquals(List.of(5.0, 11.7, 33.3, 36.7, 13.3),
+        assertEquals(List.of(5.0, 11.7, 33.3, 36.7, 13.3, 0.0),
                 r.distribucionGravedadBot().stream().map(DistribucionNivelItem::porcentaje).toList());
         assertEquals(List.of(2L, 4L, 15L, 17L, 12L, 10L),
                 r.distribucionGravedadMedico().stream().map(DistribucionNivelItem::cantidad).toList());
@@ -142,10 +144,30 @@ class MetricasHospitalServiceTest {
 
         MetricasHospitalResponse r = service.obtenerMetricas(ADMIN, HOSPITAL, DESDE, HASTA);
 
-        assertEquals(5, r.distribucionGravedadBot().size());
+        assertEquals(6, r.distribucionGravedadBot().size());
         assertEquals(0L, r.distribucionGravedadBot().getFirst().cantidad());
         assertEquals(0.0, r.distribucionGravedadBot().getFirst().porcentaje());
         assertEquals(100.0, r.distribucionGravedadBot().get(3).porcentaje());
+        assertEquals(0L, r.distribucionGravedadBot().getLast().cantidad());
+    }
+
+    @Test
+    void separaIngresosConCierreParcialDeLaGravedadClasificadaPorIa() {
+        stubContratoCanonico(List.of(
+                new ConteoPorNivelProjection(NivelDeGravedad.URGENTE, 30L),
+                new ConteoPorNivelProjection(NivelDeGravedad.NORMAL, 10L)));
+        when(repoConsultasMedicas.contarIngresadosConPretriage(HOSPITAL, INICIO, FIN)).thenReturn(40L);
+        when(repoConsultasMedicas.contarIngresadosSinPretriage(HOSPITAL, INICIO, FIN)).thenReturn(20L);
+
+        MetricasHospitalResponse r = service.obtenerMetricas(ADMIN, HOSPITAL, DESDE, HASTA);
+
+        assertEquals(40L, r.pretriageRealizado());
+        assertEquals(20L, r.pretriageNoRealizado());
+        assertEquals(66.7, r.porcentajePretriageRealizado());
+        assertEquals(20L, r.distribucionGravedadBot().getLast().cantidad());
+        assertEquals(33.3, r.distribucionGravedadBot().getLast().porcentaje());
+        assertEquals(r.ingresaronACola(), r.distribucionGravedadBot().stream()
+                .mapToLong(DistribucionNivelItem::cantidad).sum());
     }
 
     @Test
@@ -217,7 +239,7 @@ class MetricasHospitalServiceTest {
         assertNull(r.esperaPromedioMinutos());
         assertNull(r.porcentajeAtendidos());
         assertNull(r.porcentajePretriageRealizado());
-        assertEquals(5, r.distribucionGravedadBot().size());
+        assertEquals(6, r.distribucionGravedadBot().size());
         assertEquals(6, r.distribucionGravedadMedico().size());
         assertTrue(r.distribucionGravedadBot().stream().allMatch(i -> i.cantidad() == 0 && i.porcentaje() == null));
         assertTrue(r.distribucionGravedadMedico().stream().allMatch(i -> i.cantidad() == 0 && i.porcentaje() == null));
