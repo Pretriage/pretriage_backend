@@ -1,5 +1,7 @@
 # Cierre de entrevista y recuperación de clasificación desde el backend
 
+> Política vigente desde el 5/11/2026: [recuperación automática y cierre parcial](34-automatic-chat-recovery.md). Las referencias siguientes a bloqueos técnicos terminales, `FALLIDA` y reintentos manuales describen comportamientos anteriores.
+
 ## Motivo del cambio
 
 El chat 39 del 28/10/2026 llegó a `COMPLETADA`, pero el historial conservó

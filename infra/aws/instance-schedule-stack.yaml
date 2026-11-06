@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Daily operating hours for the existing Pretriage demo instance using direct Scheduler API targets and instance-scoped permissions.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    ref: [docs/33-aws-instance-schedule.md]
+    must:
+      - Reuse one existing instance in the selected Region; never terminate it.
+      - Evaluate daily 10:00 start and 22:00 stop in Buenos Aires local time.
+      - Preserve EBS data and the existing Elastic IP when stopping.
+Parameters:
+  InstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: Existing EBS-backed demo instance.
+  ScheduleState:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: Disable both schedules when the demo should remain off.
+Resources:
+  ScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Group both daily schedules and bound the Scheduler execution role trust.
+        must: [Use this group ARN in the role trust rather than individual schedule ARNs.]
+    Properties:
+      Name: !Ref AWS::StackName
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Invoke EC2 power APIs directly without Lambda or static credentials.
+        must:
+          - Permit only start and normal stop for the configured instance.
+          - Restrict the service trust to this project and schedule group.
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !GetAtt ScheduleGroup.Arn
+      Policies:
+        - PolicyName: OperateExistingDemoInstance
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [ec2:StartInstances, ec2:StopInstances]
+                Resource: !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${InstanceId}'
+  StartSchedule:
+    Type: AWS::Scheduler::Schedule
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Start the existing VM every morning without requiring a local computer.
+        must:
+          - Start at 10:00 Buenos Aires time on every day including weekends.
+          - Expire failed deliveries after five minutes to avoid late starts.
+    Properties:
+      Name: !Sub '${AWS::StackName}-start-1000'
+      GroupName: !Ref ScheduleGroup
+      Description: Start the Pretriage demo daily at 10:00 Buenos Aires time.
+      State: !Ref ScheduleState
+      ScheduleExpression: cron(0 10 * * ? *)
+      ScheduleExpressionTimezone: America/Argentina/Buenos_Aires
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      Target:
+        Arn: !Sub 'arn:${AWS::Partition}:scheduler:::aws-sdk:ec2:startInstances'
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: !Sub '{"InstanceIds":["${InstanceId}"]}'
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 300
+          MaximumRetryAttempts: 2
+  StopSchedule:
+    Type: AWS::Scheduler::Schedule
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Stop overnight compute costs while retaining the database volume and fixed IP.
+        must:
+          - Stop at 22:00 Buenos Aires time on every day including weekends.
+          - Use normal OS shutdown; never force stop, skip shutdown, or terminate.
+    Properties:
+      Name: !Sub '${AWS::StackName}-stop-2200'
+      GroupName: !Ref ScheduleGroup
+      Description: Stop the Pretriage demo daily at 22:00 Buenos Aires time.
+      State: !Ref ScheduleState
+      ScheduleExpression: cron(0 22 * * ? *)
+      ScheduleExpressionTimezone: America/Argentina/Buenos_Aires
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      Target:
+        Arn: !Sub 'arn:${AWS::Partition}:scheduler:::aws-sdk:ec2:stopInstances'
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: !Sub '{"InstanceIds":["${InstanceId}"]}'
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 300
+          MaximumRetryAttempts: 2
+Outputs:
+  ScheduleGroupName:
+    Value: !Ref ScheduleGroup
+  StartScheduleName:
+    Value: !Ref StartSchedule
+  StopScheduleName:
+    Value: !Ref StopSchedule
+  ExecutionRoleArn:
+    Value: !GetAtt SchedulerRole.Arn

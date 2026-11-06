@@ -51,6 +51,30 @@ public class Chat {
     private String errorTurnoTexto;
     private LocalDateTime turnoTextoIniciadoEn;
 
+    private Boolean cierreParcial = false;
+    @Enumerated(EnumType.STRING)
+    private EstadoRecuperacionChat estadoRecuperacion = EstadoRecuperacionChat.SIN_RECUPERACION;
+    private LocalDateTime proximoReintentoEn;
+    private Long versionEstado = 0L;
+    private Integer fallosInternosTurnoTexto = 0;
+    private Integer fallosInternosClasificacion = 0;
+    private Integer fallosDisponibilidad = 0;
+    private LocalDateTime clasificacionIniciadaEn;
+    /** Binds delayed work to the consultation selected when this interview was opened. */
+    private Long consultaOrigenId;
+    private Boolean recuperacionLegacyAplicada = false;
+
+    public boolean isCierreParcial() { return Boolean.TRUE.equals(cierreParcial); }
+    public EstadoRecuperacionChat getEstadoRecuperacion() {
+        return estadoRecuperacion == null ? EstadoRecuperacionChat.SIN_RECUPERACION : estadoRecuperacion;
+    }
+    public long getVersionEstado() { return versionEstado == null ? 0L : versionEstado; }
+    public void avanzarVersionEstado() { versionEstado = getVersionEstado() + 1; }
+    public int getFallosInternosTurnoTexto() { return fallosInternosTurnoTexto == null ? 0 : fallosInternosTurnoTexto; }
+    public int getFallosInternosClasificacion() { return fallosInternosClasificacion == null ? 0 : fallosInternosClasificacion; }
+    public int getFallosDisponibilidad() { return fallosDisponibilidad == null ? 0 : fallosDisponibilidad; }
+    public boolean isRecuperacionLegacyAplicada() { return Boolean.TRUE.equals(recuperacionLegacyAplicada); }
+
     public int getIntentosClasificacionAutomaticos() {
         return intentosClasificacionAutomaticos == null ? 0 : intentosClasificacionAutomaticos;
     }

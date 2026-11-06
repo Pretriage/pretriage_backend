@@ -13,6 +13,11 @@ import random
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
+if __package__:
+    from .demo_seed_catalogs import build_health_insurance_sql
+else:
+    from demo_seed_catalogs import build_health_insurance_sql
+
 
 SPECIALTIES: tuple[tuple[str, str], ...] = (
     ("CLINICA_MEDICA", "Clinica medica"),
@@ -624,6 +629,10 @@ $demo$;""")
             f"codigo = {_sql(code)}",
             f"INSERT INTO especialidad_medica(codigo, nombre) VALUES ({_sql(code)}, {_sql(name)})"))
 
+    # Shared additive catalog: keep the input hash compatible with previous
+    # runs so an existing demo can gain missing catalog rows on its next apply.
+    lines.append(build_health_insurance_sql())
+
     for hospital in hospitals_out:
         lines.append(_ensure_hospital(seed_key, hospital))
         hospital_ref = _registry_ref(seed_key, "hospital", hospital["key"])
@@ -787,6 +796,7 @@ $demo$;""")
     hospital_ids = f"SELECT entity_id FROM demo_seed_registry WHERE seed_key = {_sql(seed_key)} AND entity_type = 'hospital'"
     lines.extend([
         f"""SELECT 'login_accounts' AS entity_type, COUNT(*)::BIGINT AS rows FROM usuario_auth WHERE id IN ({subject_list})
+UNION ALL SELECT 'health_insurance_catalog', COUNT(*)::BIGINT FROM obra_social
 UNION ALL SELECT 'hospital_memberships', COUNT(*)::BIGINT FROM membresia_hospital
   WHERE usuario_auth_id IN ({subject_list}) AND hospital_id IN ({hospital_ids})
 UNION ALL SELECT entity_type, COUNT(*)::BIGINT FROM demo_seed_registry

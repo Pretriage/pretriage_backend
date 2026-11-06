@@ -1,6 +1,7 @@
 package com.pretriage.backend.repositories;
 
 import com.pretriage.backend.model.chat.Chat;
+import com.pretriage.backend.model.chat.EstadoClasificacionChat;
 import com.pretriage.backend.model.consultas.AtencionMedica;
 import com.pretriage.backend.model.consultas.ConsultaMedica;
 import com.pretriage.backend.model.consultas.EntradaCola;
@@ -34,7 +35,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Queries con date-range usadas por las métricas del hospital. Seed:
  * 60 ingresos del hospital A en septiembre 2026 (12 por nivel bot), 42 con atención FINALIZADA,
- * 1 con atención EN_CURSO, 40 con nivel médico (20 sin revisión) y 45 con chat vinculado;
+ * 1 con atención EN_CURSO, 40 con nivel médico (20 sin revisión), 45 chats completados
+ * con resultado válido y 5 cierres parciales;
  * además ingresos fuera del rango (31/08 23:59 y 01/10 00:00) y uno del hospital B en el rango.
  */
 @DataJpaTest
@@ -89,15 +91,22 @@ class RepoMetricasHospitalTest {
             NivelDeGravedad nivelMedico = i < 40 ? niveles[i % niveles.length] : null;
             EstadoAtencionMedica estadoAtencion = i < 42 ? EstadoAtencionMedica.FINALIZADA
                     : i == 42 ? EstadoAtencionMedica.EN_CURSO : null;
-            persistirIngreso(gestorA, ingreso, niveles[i % niveles.length], nivelMedico, i < 45, estadoAtencion);
+            EstadoClasificacionChat clasificacion = i < 5 ? null
+                    : i < 45 ? EstadoClasificacionChat.COMPLETADA
+                    : i < 50 ? EstadoClasificacionChat.PARCIAL : null;
+            persistirIngreso(gestorA, ingreso, niveles[i % niveles.length], nivelMedico,
+                    i < 55, clasificacion, i < 45, estadoAtencion);
         }
 
         // Fuera del rango (bordes) y de otro hospital: no deben contarse.
-        persistirIngreso(gestorA, DESDE.minusMinutes(1), NivelDeGravedad.URGENTE, NivelDeGravedad.URGENTE, true,
+        persistirIngreso(gestorA, DESDE.minusMinutes(1), NivelDeGravedad.URGENTE, NivelDeGravedad.URGENTE,
+                true, EstadoClasificacionChat.COMPLETADA, true,
                 EstadoAtencionMedica.FINALIZADA);
-        persistirIngreso(gestorA, HASTA, NivelDeGravedad.URGENTE, NivelDeGravedad.URGENTE, true,
+        persistirIngreso(gestorA, HASTA, NivelDeGravedad.URGENTE, NivelDeGravedad.URGENTE,
+                true, EstadoClasificacionChat.COMPLETADA, true,
                 EstadoAtencionMedica.FINALIZADA);
-        persistirIngreso(gestorB, base, NivelDeGravedad.URGENTE, NivelDeGravedad.URGENTE, true,
+        persistirIngreso(gestorB, base, NivelDeGravedad.URGENTE, NivelDeGravedad.URGENTE,
+                true, EstadoClasificacionChat.COMPLETADA, true,
                 EstadoAtencionMedica.FINALIZADA);
 
         entityManager.flush();
@@ -145,9 +154,9 @@ class RepoMetricasHospitalTest {
         long conPretriage = repoConsultasMedicas.contarIngresadosConPretriage(hospitalA.getId(), DESDE, HASTA);
         long sinPretriage = repoConsultasMedicas.contarIngresadosSinPretriage(hospitalA.getId(), DESDE, HASTA);
 
-        assertEquals(60L, bot.values().stream().mapToLong(Long::longValue).sum());
+        assertEquals(45L, bot.values().stream().mapToLong(Long::longValue).sum());
         for (NivelDeGravedad nivel : NivelDeGravedad.values()) {
-            assertEquals(12L, bot.get(nivel));
+            assertEquals(9L, bot.get(nivel));
             assertEquals(8L, medico.get(nivel));
         }
         assertEquals(20L, medico.get(null));
@@ -184,7 +193,8 @@ class RepoMetricasHospitalTest {
     }
 
     private void persistirIngreso(GestorDeCola gestor, LocalDateTime ingreso, NivelDeGravedad nivelBot,
-            NivelDeGravedad nivelMedico, boolean conChat, EstadoAtencionMedica estadoAtencion) {
+            NivelDeGravedad nivelMedico, boolean conChat, EstadoClasificacionChat clasificacion,
+            boolean resultadoDisponible, EstadoAtencionMedica estadoAtencion) {
         ConsultaMedica consulta = new ConsultaMedica();
         consulta.setHospital(gestor.getHospital());
         consulta.setEspecialidad(gestor.getEspecialidad());
@@ -196,6 +206,12 @@ class RepoMetricasHospitalTest {
             Chat chat = new Chat();
             chat.setFinalizado(true);
             chat.setFechaHoraCreacion(ingreso.minusMinutes(10));
+            chat.setEstadoClasificacion(clasificacion);
+            if (resultadoDisponible) {
+                chat.setResultadoTriageJson("{}");
+            } else if (clasificacion == EstadoClasificacionChat.PARCIAL) {
+                chat.setCierreParcial(true);
+            }
             entityManager.persist(chat);
             consulta.setChat(chat);
         }

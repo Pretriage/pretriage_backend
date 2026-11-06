@@ -4,9 +4,11 @@ import com.pretriage.backend.model.consultas.ConsultaMedica;
 import com.pretriage.backend.model.consultas.EstadoConsulta;
 import com.pretriage.backend.repositories.projections.ConteoPorNivelProjection;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import jakarta.persistence.LockModeType;
 
 import java.time.LocalDateTime;
 import java.util.Collection;
@@ -15,6 +17,10 @@ import java.util.Optional;
 
 @Repository
 public interface RepoConsultasMedicas extends JpaRepository<ConsultaMedica, Long> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select c from ConsultaMedica c where c.id = :id")
+    Optional<ConsultaMedica> findByIdForUpdate(@Param("id") Long id);
 
     boolean existsByIdAndPacienteUsuarioAuthId(Long consultaId, String auth0Id);
 
@@ -42,6 +48,9 @@ public interface RepoConsultasMedicas extends JpaRepository<ConsultaMedica, Long
             where e.gestorDeCola.hospital.id = :hospitalId
               and e.fechaHoraIngreso >= :desde
               and e.fechaHoraIngreso < :hasta
+              and c.chat is not null
+              and (c.chat.estadoClasificacion = com.pretriage.backend.model.chat.EstadoClasificacionChat.COMPLETADA
+                   or (c.chat.estadoClasificacion is null and c.chat.resultadoTriageJson is not null))
             group by c.nivelDeGravedadBot
             """)
     List<ConteoPorNivelProjection> contarIngresadosPorNivelBot(@Param("hospitalId") Long hospitalId,
@@ -68,6 +77,8 @@ public interface RepoConsultasMedicas extends JpaRepository<ConsultaMedica, Long
               and e.fechaHoraIngreso >= :desde
               and e.fechaHoraIngreso < :hasta
               and c.chat is not null
+              and (c.chat.estadoClasificacion = com.pretriage.backend.model.chat.EstadoClasificacionChat.COMPLETADA
+                   or (c.chat.estadoClasificacion is null and c.chat.resultadoTriageJson is not null))
             """)
     long contarIngresadosConPretriage(@Param("hospitalId") Long hospitalId,
             @Param("desde") LocalDateTime desde,
@@ -75,11 +86,14 @@ public interface RepoConsultasMedicas extends JpaRepository<ConsultaMedica, Long
 
     @Query("""
             select count(c)
-            from EntradaCola e join e.consultaMedica c
+            from EntradaCola e join e.consultaMedica c left join c.chat ch
             where e.gestorDeCola.hospital.id = :hospitalId
               and e.fechaHoraIngreso >= :desde
               and e.fechaHoraIngreso < :hasta
-              and c.chat is null
+              and (ch.id is null
+                   or (ch.estadoClasificacion is not null
+                       and ch.estadoClasificacion <> com.pretriage.backend.model.chat.EstadoClasificacionChat.COMPLETADA)
+                   or (ch.estadoClasificacion is null and ch.resultadoTriageJson is null))
             """)
     long contarIngresadosSinPretriage(@Param("hospitalId") Long hospitalId,
             @Param("desde") LocalDateTime desde,

@@ -1,6 +1,7 @@
 package com.pretriage.backend.services.voz;
 
 import com.pretriage.backend.controllers.dtos.ChatTurnResponse;
+import com.pretriage.backend.controllers.dtos.ChatDTO;
 import com.pretriage.backend.controllers.dtos.EstadoEntradaChat;
 import com.pretriage.backend.controllers.dtos.MensajeDTO;
 import com.pretriage.backend.controllers.dtos.ResumenEntrevistaVoz;
@@ -37,6 +38,7 @@ import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -58,6 +60,20 @@ class SesionVozChatTest {
         conexion = new ConexionFalsa();
         canal = new CanalFalso();
         when(geminiLiveCliente.conectar(any())).thenReturn(CompletableFuture.completedFuture(conexion));
+        when(chatService.recuperarVozInterrumpida(anyString(), anyString(), anyList(), anyString(), anyBoolean(), any()))
+                .thenAnswer(invocation -> snapshotVoz(invocation.getArgument(4)));
+    }
+
+    private static ChatDTO snapshotVoz(boolean parcial) {
+        var estado = parcial ? com.pretriage.backend.model.chat.EstadoClasificacionChat.PARCIAL
+                : com.pretriage.backend.model.chat.EstadoClasificacionChat.NO_SOLICITADA;
+        var turno = parcial ? com.pretriage.backend.model.chat.EstadoTurnoTexto.COMPLETADA
+                : com.pretriage.backend.model.chat.EstadoTurnoTexto.NO_DISPONIBLE;
+        var recuperacion = parcial ? com.pretriage.backend.model.chat.EstadoRecuperacionChat.SIN_RECUPERACION
+                : com.pretriage.backend.model.chat.EstadoRecuperacionChat.ESPERANDO_API;
+        return new ChatDTO(7L, List.of(), LocalDateTime.now(), parcial, estado, turno,
+                parcial ? null : "voice-request", parcial ? 0 : 1, parcial, recuperacion,
+                parcial ? null : java.time.Instant.now().plusSeconds(30), 2L);
     }
 
     @Test
@@ -154,9 +170,14 @@ class SesionVozChatTest {
         turnoCompleto(sesion);
         assertEquals(1, canal.eventos.stream().filter(e -> "transcripcion_bot".equals(json(e).path("tipo").asText())).count());
         sesion.recibirControlCliente("{\"tipo\":\"cerrar\"}");
-        verify(chatService, timeout(2_000)).registrarTurnosVoz("7", "auth0|paciente", List.of(
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        verify(chatService, timeout(2_000)).guardarVozInterrumpidaSinFinalizar(eq("7"), eq("auth0|paciente"),
+                confirmados.capture(), fragmento.capture());
+        assertEquals(List.of(
                 new TurnoVoz(AutorMensaje.PACIENTE, "Me duele la rodilla"),
-                new TurnoVoz(AutorMensaje.BOT, "Desde cuando?")));
+                new TurnoVoz(AutorMensaje.BOT, "Desde cuando?")), confirmados.getValue());
+        assertEquals("", fragmento.getValue());
     }
 
     @Test
@@ -219,10 +240,15 @@ class SesionVozChatTest {
         assertFalse(canal.eventos.stream().anyMatch(e -> e.contains("este texto ya fue cancelado")));
         assertEquals("turno_completo", json(canal.eventos.getLast()).path("tipo").asText());
         sesion.recibirControlCliente("{\"tipo\":\"cerrar\"}");
-        verify(chatService, timeout(2_000)).registrarTurnosVoz("7", "auth0|paciente", List.of(
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        verify(chatService, timeout(2_000)).guardarVozInterrumpidaSinFinalizar(eq("7"), eq("auth0|paciente"),
+                confirmados.capture(), fragmento.capture());
+        assertEquals(List.of(
                 new TurnoVoz(AutorMensaje.PACIENTE, "Me duele la cabeza"),
                 new TurnoVoz(AutorMensaje.BOT, "Desde cuando y"),
-                new TurnoVoz(AutorMensaje.PACIENTE, "Perdon, es el cuello")));
+                new TurnoVoz(AutorMensaje.PACIENTE, "Perdon, es el cuello")), confirmados.getValue());
+        assertEquals("", fragmento.getValue());
     }
 
     @Test
@@ -356,18 +382,49 @@ class SesionVozChatTest {
 
         sesion.recibirControlCliente("{\"tipo\":\"cerrar\"}");
 
-        verify(chatService, timeout(2_000)).registrarTurnosVoz("7", "auth0|paciente", List.of(
-                new TurnoVoz(AutorMensaje.PACIENTE, "Tengo fiebre"),
-                new TurnoVoz(AutorMensaje.BOT, "Desde cuando?")));
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        verify(chatService, timeout(2_000)).guardarVozInterrumpidaSinFinalizar(eq("7"), eq("auth0|paciente"),
+                confirmados.capture(), fragmento.capture());
+        assertEquals(List.of(new TurnoVoz(AutorMensaje.PACIENTE, "Tengo fiebre")), confirmados.getValue());
+        assertEquals("", fragmento.getValue(), "The first bot transcription closes the patient turn, while its own open question is discarded");
         verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
         assertTrue(conexion.cerrada);
         assertTrue(canal.cerrado);
     }
 
     @Test
-    void siFallaLaPreclasificacionAvisaYConservaLaTranscripcion() {
+    void controlCerrarGuardaLaUltimaTranscripcionAbiertaComoFragmentoExcluido() {
+        SesionVozChat sesion = sesion(historialNuevo());
+        sesion.iniciar();
+        entrada(sesion, "Me duele la cabeza desde ayer.");
+        turnoCompleto(sesion);
+        entrada(sesion, "También me duele el brazo"); // no turnComplete: remains an open ASR fragment
+
+        sesion.recibirControlCliente("{\"tipo\":\"cerrar\"}");
+
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        verify(chatService, timeout(2_000)).guardarVozInterrumpidaSinFinalizar(
+                eq("7"), eq("auth0|paciente"), confirmados.capture(), fragmento.capture());
+        assertEquals(List.of(new TurnoVoz(AutorMensaje.PACIENTE, "Me duele la cabeza desde ayer.")), confirmados.getValue());
+        assertEquals("También me duele el brazo", fragmento.getValue());
+        verify(chatService, never()).registrarTurnosVoz(anyString(), anyString(), anyList());
+        verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
+        verify(chatService, never()).finalizarEntrevistaVozConfirmadaParcial(anyString(), anyString(), anyList());
+        assertTrue(canal.cerrado);
+    }
+
+    @Test
+    void siFallaLaPreclasificacionDejaClasificacionPendienteSinMarcarApiNoDisponible() {
         when(chatService.finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any()))
                 .thenThrow(new IllegalStateException("sin cola"));
+        when(chatService.recuperarVozInterrumpida(anyString(), anyString(), anyList(), anyString(), anyBoolean(), any()))
+                .thenReturn(new ChatDTO(7L, List.of(), LocalDateTime.now(), true,
+                        com.pretriage.backend.model.chat.EstadoClasificacionChat.PENDIENTE,
+                        com.pretriage.backend.model.chat.EstadoTurnoTexto.COMPLETADA, null, 0, false,
+                        com.pretriage.backend.model.chat.EstadoRecuperacionChat.REINTENTANDO,
+                        java.time.Instant.now().plusSeconds(5), 1L));
         SesionVozChat sesion = sesion(historialNuevo());
         sesion.iniciar();
         entrada(sesion, "Tengo dificultad para respirar");
@@ -378,13 +435,27 @@ class SesionVozChatTest {
         sesion.alCerrar(1000, "fin");
 
         esperar(() -> canal.cerrado);
-        assertTrue(canal.eventos.stream().anyMatch(e -> e.contains("\"error\"")));
-        verify(chatService).registrarCierreVozFallido("7", "auth0|paciente",
-                List.of(new TurnoVoz(AutorMensaje.PACIENTE, "Tengo dificultad para respirar")));
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        ArgumentCaptor<Boolean> agotado = ArgumentCaptor.captor();
+        ArgumentCaptor<ProveedorIaException> fallo = ArgumentCaptor.captor();
+        verify(chatService).recuperarVozInterrumpida(eq("7"), eq("auth0|paciente"), confirmados.capture(),
+                fragmento.capture(), agotado.capture(), fallo.capture());
+        assertEquals(List.of(new TurnoVoz(AutorMensaje.PACIENTE, "Tengo dificultad para respirar")), confirmados.getValue());
+        assertEquals("", fragmento.getValue());
+        assertTrue(agotado.getValue());
+        assertFalse(fallo.getValue().isApiNoDisponible());
+        JsonNode estado = canal.eventos.stream().map(this::json)
+                .filter(evento -> evento.path("tipo").asText().equals("estado_chat")).findFirst().orElseThrow();
+        assertEquals("PENDIENTE", estado.path("chat").path("estadoClasificacion").asText());
+        assertEquals("COMPLETADA", estado.path("chat").path("estadoTurnoTexto").asText());
+        assertNotEquals("NO_DISPONIBLE", estado.path("chat").path("estadoTurnoTexto").asText());
+        assertFalse(canal.eventos.stream().anyMatch(e -> e.contains("\"tipo\":\"error\"")));
+        assertFalse(canal.eventos.stream().anyMatch(e -> e.contains("triage_finalizado")));
     }
 
     @Test
-    void falloTecnicoEnPreflightEsperaElDrenajeYGuardaElSnapshotCompletoUnaSolaVez() {
+    void falloTecnicoEnPreflightPersisteConfirmadosYFragmentoAbiertoPorSeparado() {
         doThrow(new ProveedorIaException(null)).when(chatService)
                 .validarAlcanceCierreVoz(anyString(), anyString(), anyList(), any());
         SesionVozChat sesion = sesion(historialNuevo());
@@ -402,12 +473,17 @@ class SesionVozChatTest {
         sesion.alCerrar(1000, "fin");
         esperar(() -> canal.cerrado);
 
-        ArgumentCaptor<List<TurnoVoz>> turnos = ArgumentCaptor.captor();
-        verify(chatService, times(1)).registrarCierreVozFallido(eq("7"), eq("auth0|paciente"), turnos.capture());
-        assertTrue(turnos.getValue().stream().anyMatch(t -> t.contenido().contains("me cuesta respirar")));
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        verify(chatService, times(1)).recuperarVozInterrumpida(eq("7"), eq("auth0|paciente"),
+                confirmados.capture(), fragmento.capture(), eq(true), any());
+        assertTrue(confirmados.getValue().stream().anyMatch(t -> t.contenido().equals("No quiero seguir respondiendo.")));
+        assertEquals("Y ahora me cuesta respirar.", fragmento.getValue());
+        assertFalse(confirmados.getValue().stream().anyMatch(t -> t.contenido().contains("me cuesta respirar")));
         verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
         verify(chatService, never()).registrarTurnosVoz(anyString(), anyString(), anyList());
-        assertTrue(canal.eventos.stream().anyMatch(e -> e.contains("\"error\"")));
+        assertTrue(canal.eventos.stream().anyMatch(e -> e.contains("\"tipo\":\"procesamiento_finalizado\"")));
+        assertFalse(canal.eventos.stream().anyMatch(e -> e.contains("\"tipo\":\"error\"")));
         assertFalse(canal.eventos.stream().anyMatch(e -> e.contains("triage_finalizado")));
     }
 
@@ -429,10 +505,14 @@ class SesionVozChatTest {
         sesion.cerrar();
         liberarPreflight.countDown();
 
-        ArgumentCaptor<List<TurnoVoz>> turnos = ArgumentCaptor.captor();
-        verify(chatService, timeout(2_000).times(1))
-                .registrarCierreVozFallido(eq("7"), eq("auth0|paciente"), turnos.capture());
-        assertTrue(turnos.getValue().stream().anyMatch(t -> t.contenido().contains("falta el aire")));
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        ArgumentCaptor<Boolean> agotado = ArgumentCaptor.captor();
+        verify(chatService, timeout(2_000).times(1)).recuperarVozInterrumpida(
+                eq("7"), eq("auth0|paciente"), confirmados.capture(), fragmento.capture(), agotado.capture(), any());
+        assertTrue(confirmados.getValue().stream().anyMatch(t -> t.contenido().equals("No quiero seguir respondiendo.")));
+        assertEquals("También me falta el aire.", fragmento.getValue());
+        assertTrue(agotado.getValue());
         verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
         verify(chatService, never()).registrarTurnosVoz(anyString(), anyString(), anyList());
     }
@@ -464,9 +544,6 @@ class SesionVozChatTest {
 
     @Test
     void siNoConfirmaElTransporteProcesaAutomaticamenteElCierreYaAceptado() {
-        when(chatService.finalizarEntrevistaVozConfirmadaParcial(anyString(), anyString(), anyList()))
-                .thenReturn(new ChatTurnResponse(new MensajeDTO("Cierre", "BOT", LocalDateTime.now()),
-                        new TiempoEstimadoAtencionResponse(), "GEMINI"));
         try (RelojManual reloj = new RelojManual()) {
             SesionVozChat sesion = sesion(historialNuevo(), reloj, Duration.ofMillis(20), Duration.ofMillis(50));
             sesion.iniciar();
@@ -482,9 +559,16 @@ class SesionVozChatTest {
             sesion.alCerrar(1000, "confirmacion fuera de plazo");
             verify(chatService, never()).validarAlcanceCierreVoz(anyString(), anyString(), anyList(), any());
             verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
-            verify(chatService).finalizarEntrevistaVozConfirmadaParcial(eq("7"), eq("auth0|paciente"), anyList());
+            ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+            ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+            verify(chatService).recuperarVozInterrumpida(eq("7"), eq("auth0|paciente"),
+                    confirmados.capture(), fragmento.capture(), eq(true), any());
+            assertTrue(confirmados.getValue().stream().anyMatch(t -> t.contenido().equals("Tengo dolor de pecho y dificultad para respirar")));
+            assertEquals("", fragmento.getValue());
             verify(chatService, never()).registrarCierreVozFallido(anyString(), anyString(), anyList());
-            assertTrue(canal.eventos.stream().anyMatch(e -> e.contains("triage_finalizado")));
+            assertTrue(canal.eventos.stream().anyMatch(e -> e.contains("procesamiento_finalizado")));
+            assertFalse(canal.eventos.stream().anyMatch(e -> e.contains("triage_finalizado")));
+            assertFalse(canal.eventos.stream().anyMatch(e -> e.contains("\"tipo\":\"error\"")));
         }
     }
 
@@ -534,9 +618,12 @@ class SesionVozChatTest {
         assertTrue(inicioClasificacion.await(2, TimeUnit.SECONDS));
         sesion.cerrar();
         liberarClasificacion.countDown();
-        ArgumentCaptor<List<TurnoVoz>> turnos = ArgumentCaptor.captor();
-        verify(chatService, timeout(2_000)).registrarTurnosVoz(eq("7"), eq("auth0|paciente"), turnos.capture());
-        assertTrue(turnos.getValue().stream().anyMatch(t -> t.contenido().contains("No quiero seguir respondiendo.")));
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        verify(chatService, timeout(2_000)).guardarVozInterrumpidaSinFinalizar(
+                eq("7"), eq("auth0|paciente"), confirmados.capture(), fragmento.capture());
+        assertTrue(confirmados.getValue().stream().anyMatch(t -> t.contenido().contains("No quiero seguir respondiendo.")));
+        assertEquals("", fragmento.getValue());
         verify(chatService).validarAlcanceCierreVoz(anyString(), anyString(), anyList(), any());
         verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
         verify(chatService, never()).registrarCierreVozFallido(anyString(), anyString(), anyList());
@@ -868,7 +955,7 @@ class SesionVozChatTest {
     }
 
     @Test
-    void timeoutDeCierreAutomaticoConFragmentoAbiertoGuardaContinuacionSinFALLIDA() {
+    void timeoutDeCierreAutomaticoConFragmentoAbiertoGuardaParcialExcluyendoElFragmento() {
         RelojManual reloj = new RelojManual();
         SesionVozChat sesion = sesion(historialNuevo(), reloj, Duration.ZERO,
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
@@ -887,16 +974,25 @@ class SesionVozChatTest {
         reloj.avanzar(30_000);
 
         esperar(() -> canal.cerrado);
-        ArgumentCaptor<List<TurnoVoz>> transcripcion = ArgumentCaptor.captor();
-        verify(chatService, times(1)).registrarTurnosVoz(eq("7"), eq("auth0|paciente"), transcripcion.capture());
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        verify(chatService, times(1)).recuperarVozInterrumpida(eq("7"), eq("auth0|paciente"),
+                confirmados.capture(), fragmento.capture(), eq(true), any());
         verify(chatService, never()).registrarCierreVozFallido(anyString(), anyString(), anyList());
         verify(chatService, never()).reintentarClasificacion(anyString(), anyString());
         verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
         verify(chatService, never()).finalizarEntrevistaVozConfirmadaParcial(anyString(), anyString(), anyList());
-        assertTrue(transcripcion.getValue().stream().anyMatch(turno -> "También tengo hormigueo en la mano".equals(turno.contenido())));
+        assertEquals("También tengo hormigueo en la mano", fragmento.getValue());
+        assertFalse(confirmados.getValue().stream().anyMatch(turno -> turno.contenido().contains("hormigueo en la mano")));
         assertFalse(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"triage_finalizado\"")));
-        assertFalse(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"entrevista_finalizada\"")));
-        assertTrue(canal.eventos.stream().anyMatch(evento -> evento.contains("podés continuar la entrevista")));
+        assertTrue(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"procesamiento_finalizado\"")));
+        assertTrue(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"entrevista_finalizada\"")));
+        assertFalse(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"error\"")));
+        JsonNode procesamiento = canal.eventos.stream().map(this::json)
+                .filter(evento -> evento.path("tipo").asText().equals("procesamiento_finalizado"))
+                .findFirst().orElseThrow();
+        assertEquals("PARCIAL", procesamiento.path("chat").path("estadoClasificacion").asText());
+        assertTrue(procesamiento.path("chat").path("cierreParcial").asBoolean());
     }
 
     @Test
@@ -940,9 +1036,6 @@ class SesionVozChatTest {
     @Test
     void deadlineTrasCierreConfirmadoRecuperaParcialConLaTranscripcionTardia() {
         RelojManual reloj = new RelojManual();
-        when(chatService.finalizarEntrevistaVozConfirmadaParcial(anyString(), anyString(), anyList()))
-                .thenReturn(new ChatTurnResponse(new MensajeDTO("Cierre parcial", "BOT", LocalDateTime.now()),
-                        new TiempoEstimadoAtencionResponse(), "GEMINI"));
         SesionVozChat sesion = sesion(historialNuevo(), reloj, Duration.ZERO,
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
         sesion.iniciar();
@@ -962,13 +1055,18 @@ class SesionVozChatTest {
         reloj.avanzar(30_000); // Provider never confirms the requested transport close.
         esperar(() -> canal.cerrado);
 
-        ArgumentCaptor<List<TurnoVoz>> transcripcion = ArgumentCaptor.captor();
-        verify(chatService).finalizarEntrevistaVozConfirmadaParcial(
-                eq("7"), eq("auth0|paciente"), transcripcion.capture());
-        assertTrue(transcripcion.getValue().stream()
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        verify(chatService).recuperarVozInterrumpida(eq("7"), eq("auth0|paciente"),
+                confirmados.capture(), fragmento.capture(), eq(true), any());
+        assertEquals("", fragmento.getValue());
+        assertTrue(confirmados.getValue().stream()
                 .anyMatch(turno -> turno.contenido().contains("También me duele el brazo desde hoy.")));
         verify(chatService, never()).registrarCierreVozFallido(anyString(), anyString(), anyList());
         verify(chatService, never()).reintentarClasificacion(anyString(), anyString());
+        verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
+        assertTrue(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"procesamiento_finalizado\"")));
+        assertFalse(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"triage_finalizado\"")));
     }
 
     @Test
@@ -1134,7 +1232,7 @@ class SesionVozChatTest {
     }
 
     @Test
-    void respuestaBotSinPreguntaRecibeUnaRecuperacionYDespuesErrorReanudable() {
+    void respuestaBotSinPreguntaAgotaRecuperacionYGuardaCierreParcial() {
         RelojManual reloj = new RelojManual();
         SesionVozChat sesion = sesion(historialNuevo(), reloj, Duration.ZERO,
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
@@ -1159,23 +1257,26 @@ class SesionVozChatTest {
                         && evento.path("activo").asBoolean()));
 
         reloj.avanzar(8_000);
-        esperar(() -> canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"error\"")));
+        esperar(() -> canal.cerrado);
 
-        assertTrue(canal.eventos.stream().map(this::json)
-                .anyMatch(evento -> evento.path("tipo").asText().equals("error")
-                        && evento.path("mensaje").asText().contains("podés retomar")));
-        assertTrue(canal.eventos.stream().map(this::json)
-                .anyMatch(evento -> evento.path("tipo").asText().equals("procesando_respuesta")
-                        && !evento.path("activo").asBoolean()));
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        verify(chatService).recuperarVozInterrumpida(eq("7"), eq("auth0|paciente"),
+                confirmados.capture(), fragmento.capture(), eq(true), any());
+        assertEquals("", fragmento.getValue());
+        assertTrue(confirmados.getValue().stream().anyMatch(t -> t.contenido().equals("Me duele la cabeza desde ayer.")));
+        assertTrue(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"procesamiento_finalizado\"")));
+        assertFalse(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"triage_finalizado\"")));
+        assertFalse(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"error\"")));
         assertTrue(canal.cerrado);
-        verify(chatService, times(1)).registrarTurnosVoz(eq("7"), eq("auth0|paciente"), anyList());
+        verify(chatService, never()).registrarTurnosVoz(eq("7"), eq("auth0|paciente"), anyList());
         verify(chatService, never()).registrarCierreVozFallido(anyString(), anyString(), anyList());
         verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
         verify(chatService, never()).reintentarClasificacion(anyString(), anyString());
     }
 
     @Test
-    void transcripcionSinFronteraSeConservaYExpiraSinClasificar() {
+    void transcripcionSinFronteraSeGuardaSeparadaYQuedaExcluidaAlAgotarse() {
         RelojManual reloj = new RelojManual();
         SesionVozChat sesion = sesion(historialNuevo(), reloj, Duration.ZERO,
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
@@ -1186,22 +1287,24 @@ class SesionVozChatTest {
         assertFalse(canal.eventos.stream().map(this::json)
                 .anyMatch(evento -> evento.path("tipo").asText().equals("error")));
         reloj.avanzar(8_000);
-        esperar(() -> canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"error\"")));
-
-        assertTrue(canal.eventos.stream().map(this::json)
-                .anyMatch(evento -> evento.path("tipo").asText().equals("error")
-                        && evento.path("mensaje").asText().contains("podés retomarla")));
-        assertTrue(canal.eventos.stream().map(this::json)
-                .anyMatch(evento -> evento.path("tipo").asText().equals("procesando_respuesta")
-                        && !evento.path("activo").asBoolean()));
+        esperar(() -> canal.cerrado);
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        verify(chatService).recuperarVozInterrumpida(eq("7"), eq("auth0|paciente"),
+                confirmados.capture(), fragmento.capture(), eq(true), any());
+        assertTrue(confirmados.getValue().isEmpty());
+        assertEquals("Me duele la cabeza desde ayer", fragmento.getValue());
+        assertTrue(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"procesamiento_finalizado\"")));
+        assertFalse(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"triage_finalizado\"")));
+        assertFalse(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"error\"")));
         verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
-        verify(chatService, times(1)).registrarTurnosVoz(eq("7"), eq("auth0|paciente"), anyList());
+        verify(chatService, never()).registrarTurnosVoz(eq("7"), eq("auth0|paciente"), anyList());
         verify(chatService, never()).registrarCierreVozFallido(anyString(), anyString(), anyList());
         verify(chatService, never()).reintentarClasificacion(anyString(), anyString());
     }
 
     @Test
-    void watchdogNoCortaAudioBotMientrasLleganFramesYExpiraTrasSilencio() {
+    void watchdogNoCortaAudioBotMientrasLleganFramesYLuegoGuardaCierreParcial() {
         RelojManual reloj = new RelojManual();
         SesionVozChat sesion = sesion(historialNuevo(), reloj, Duration.ZERO,
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
@@ -1230,9 +1333,16 @@ class SesionVozChatTest {
         assertFalse(canal.eventos.stream().map(this::json)
                 .anyMatch(evento -> evento.path("tipo").asText().equals("error")));
         reloj.avanzar(8_000);
-        esperar(() -> canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"error\"")));
-
-        verify(chatService, times(1)).registrarTurnosVoz(eq("7"), eq("auth0|paciente"), anyList());
+        esperar(() -> canal.cerrado);
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        verify(chatService).recuperarVozInterrumpida(eq("7"), eq("auth0|paciente"),
+                confirmados.capture(), fragmento.capture(), eq(true), any());
+        assertEquals("", fragmento.getValue());
+        assertTrue(confirmados.getValue().stream().anyMatch(t -> t.contenido().equals("Me duele la cabeza desde ayer.")));
+        assertTrue(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"procesamiento_finalizado\"")));
+        assertFalse(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"error\"")));
+        verify(chatService, never()).registrarTurnosVoz(eq("7"), eq("auth0|paciente"), anyList());
         verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
         verify(chatService, never()).reintentarClasificacion(anyString(), anyString());
     }
@@ -1246,6 +1356,34 @@ class SesionVozChatTest {
 
         assertEquals("error", json(canal.eventos.getFirst()).path("tipo").asText());
         assertTrue(canal.cerrado);
+    }
+
+    @Test
+    void interrupcionApiPublicaSnapshotEstadoChatSinInventarRespuesta() {
+        SesionVozChat sesion = sesion(historialNuevo());
+        sesion.iniciar();
+        entrada(sesion, "Me duele la cabeza desde ayer.");
+        turnoCompleto(sesion);
+
+        sesion.alFallar(new ProveedorIaException(new java.net.SocketTimeoutException("timeout")));
+        esperar(() -> canal.cerrado);
+
+        ArgumentCaptor<List<TurnoVoz>> confirmados = ArgumentCaptor.captor();
+        ArgumentCaptor<String> fragmento = ArgumentCaptor.captor();
+        ArgumentCaptor<Boolean> agotado = ArgumentCaptor.captor();
+        ArgumentCaptor<ProveedorIaException> fallo = ArgumentCaptor.captor();
+        verify(chatService).recuperarVozInterrumpida(eq("7"), eq("auth0|paciente"),
+                confirmados.capture(), fragmento.capture(), agotado.capture(), fallo.capture());
+        assertTrue(confirmados.getValue().stream().anyMatch(t -> t.contenido().equals("Me duele la cabeza desde ayer.")));
+        assertEquals("", fragmento.getValue());
+        assertFalse(agotado.getValue());
+        assertTrue(fallo.getValue().isApiNoDisponible());
+        JsonNode estado = canal.eventos.stream().map(this::json)
+                .filter(evento -> evento.path("tipo").asText().equals("estado_chat")).findFirst().orElseThrow();
+        assertEquals("NO_DISPONIBLE", estado.path("chat").path("estadoTurnoTexto").asText());
+        assertEquals("ESPERANDO_API", estado.path("chat").path("estadoRecuperacion").asText());
+        assertFalse(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"triage_finalizado\"")));
+        assertFalse(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"error\"")));
     }
 
     private SesionVozChat sesion(List<MensajeDTO> historial) {

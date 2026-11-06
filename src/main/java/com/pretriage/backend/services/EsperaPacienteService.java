@@ -2,6 +2,7 @@ package com.pretriage.backend.services;
 
 import com.pretriage.backend.controllers.dtos.EstadoConsultaPacienteDTO;
 import com.pretriage.backend.exceptions.ConflictoDeEstadoException;
+import com.pretriage.backend.model.chat.Chat;
 import com.pretriage.backend.model.consultas.ConsultaMedica;
 import com.pretriage.backend.model.consultas.EntradaCola;
 import com.pretriage.backend.model.consultas.EstadoConsulta;
@@ -13,14 +14,21 @@ import com.pretriage.backend.repositories.RepoChat;
 import com.pretriage.backend.repositories.RepoConsultasMedicas;
 import com.pretriage.backend.repositories.RepoEntradasCola;
 import jakarta.transaction.Transactional;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Objects;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -34,6 +42,9 @@ public class EsperaPacienteService {
     private final RepoConsultasMedicas repoConsultasMedicas;
     private final RepoChat repoChat;
     private final EstimacionAtencionService estimacionAtencionService;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     @Transactional
     public EstadoConsultaPacienteDTO ausentarme(String auth0Id) {
@@ -114,10 +125,31 @@ public class EsperaPacienteService {
     @Transactional
     public EstadoConsultaPacienteDTO cancelarSeleccion(String auth0Id) {
         Paciente paciente = obtenerPaciente(auth0Id);
-        EntradaCola entrada = repoEntradasCola
+        EntradaCola entradaLeida = repoEntradasCola
                 .findFirstByConsultaMedicaPacienteIdOrderByIdDesc(paciente.getId())
                 .orElseThrow(() -> new NoSuchElementException(
                         "El paciente no tiene una seleccion de hospital activa para cancelar"));
+
+        ConsultaMedica consultaLeida = entradaLeida.getConsultaMedica();
+        List<Chat> chatsBloqueados = bloquearChatsDeCancelacion(auth0Id, consultaLeida);
+        ConsultaMedica consulta = repoConsultasMedicas.findByIdForUpdate(consultaLeida.getId())
+                .orElseThrow(() -> new NoSuchElementException("La consulta ya no existe"));
+        entityManager.refresh(consulta, LockModeType.PESSIMISTIC_WRITE);
+        if (consulta.getPaciente() == null || !consulta.getPaciente().getId().equals(paciente.getId())) {
+            throw new ConflictoDeEstadoException("La consulta ya no pertenece a la selección activa");
+        }
+
+        EntradaCola entrada = repoEntradasCola.findByConsultaMedicaId(consulta.getId())
+                .orElseThrow(() -> new NoSuchElementException("La consulta ya no está en cola"));
+        entityManager.refresh(entrada);
+        EntradaCola ultimaEntrada = repoEntradasCola
+                .findFirstByConsultaMedicaPacienteIdOrderByIdDesc(paciente.getId())
+                .orElseThrow(() -> new NoSuchElementException(
+                        "El paciente no tiene una seleccion de hospital activa para cancelar"));
+        if (!Objects.equals(entrada.getId(), entradaLeida.getId())
+                || !Objects.equals(ultimaEntrada.getId(), entrada.getId())) {
+            throw new ConflictoDeEstadoException("La selección activa cambió mientras se procesaba la cancelación");
+        }
 
         if (entrada.getEstado() == EstadoEntradaCola.EN_ATENCION) {
             throw new ConflictoDeEstadoException("No puede cancelar una consulta con atencion en curso");
@@ -132,7 +164,7 @@ public class EsperaPacienteService {
             return mapear(entrada);
         }
 
-        ConsultaMedica consulta = entrada.getConsultaMedica();
+        finalizarChatsCancelados(chatsBloqueados);
         entrada.setEstado(EstadoEntradaCola.CANCELADA);
         entrada.setTipoPausa(null);
         entrada.setFechaHoraLimiteRespuesta(null);
@@ -140,17 +172,37 @@ public class EsperaPacienteService {
         consulta.setEstadoConsulta(EstadoConsulta.CANCELADA);
         consulta.setMedico(null);
         consulta.setSala(null);
-        finalizarChatAbierto(auth0Id);
-
         repoConsultasMedicas.save(consulta);
         repoEntradasCola.save(entrada);
         return mapear(entrada);
     }
 
-    private void finalizarChatAbierto(String auth0Id) {
-        repoChat.findFirstByPacienteUsuarioAuthIdAndFinalizadoFalse(auth0Id)
-                .ifPresent(chat -> {
+    /** Lock order must match triage completion: Chat rows by id, then ConsultaMedica. */
+    private List<Chat> bloquearChatsDeCancelacion(String auth0Id, ConsultaMedica consulta) {
+        List<Long> ids = new ArrayList<>();
+        repoChat.findFirstByPacienteUsuarioAuthIdOrderByFechaHoraCreacionDescIdDesc(auth0Id)
+                .map(Chat::getId).ifPresent(ids::add);
+        repoChat.findAllByPacienteUsuarioAuthIdAndFinalizadoFalse(auth0Id)
+                .stream().map(Chat::getId).forEach(ids::add);
+        Optional.ofNullable(consulta.getChat()).map(Chat::getId).ifPresent(ids::add);
+
+        return ids.stream().distinct().sorted(Comparator.naturalOrder())
+                .map(id -> repoChat.findForUpdate(id, auth0Id))
+                .flatMap(Optional::stream)
+                .peek(chat -> entityManager.refresh(chat, LockModeType.PESSIMISTIC_WRITE)).toList();
+    }
+
+    private void finalizarChatsCancelados(List<Chat> chats) {
+        chats.forEach(chat -> {
                     chat.setFinalizado(true);
+                    if (chat.getEstadoClasificacion() == com.pretriage.backend.model.chat.EstadoClasificacionChat.PENDIENTE) {
+                        chat.setEstadoClasificacion(com.pretriage.backend.model.chat.EstadoClasificacionChat.PARCIAL);
+                        chat.setCierreParcial(true);
+                    }
+                    chat.setEstadoTurnoTexto(com.pretriage.backend.model.chat.EstadoTurnoTexto.COMPLETADA);
+                    chat.setTurnoTextoEnCurso(false);
+                    ChatService.limpiarRecuperacion(chat);
+                    chat.avanzarVersionEstado();
                     repoChat.save(chat);
                 });
     }
@@ -179,8 +231,22 @@ public class EsperaPacienteService {
 
     private void cancelarEntradas(List<EntradaCola> entradas) {
         entradas.forEach(entrada -> {
-            entrada.setEstado(EstadoEntradaCola.CANCELADA);
             ConsultaMedica consulta = entrada.getConsultaMedica();
+            List<Chat> chats = consulta.getPaciente().getUsuarioAuth() == null ? List.of()
+                    : bloquearChatsDeCancelacion(consulta.getPaciente().getUsuarioAuth().getId(), consulta);
+            consulta = repoConsultasMedicas.findByIdForUpdate(consulta.getId()).orElseThrow();
+            entityManager.refresh(consulta, LockModeType.PESSIMISTIC_WRITE);
+            entityManager.refresh(entrada);
+            LocalDateTime ahora = LocalDateTime.now();
+            boolean vencida = entrada.getEstado() == EstadoEntradaCola.ATRASADO
+                    && entrada.getTipoPausa() == TipoPausaCola.ATRASADO_CONFIRMADO
+                    && entrada.getFechaHoraLimiteRespuesta() != null && entrada.getFechaHoraLimiteRespuesta().isBefore(ahora)
+                    || entrada.getEstado() == EstadoEntradaCola.EN_ESPERA && entrada.getFechaHoraSalidaTemporal() != null
+                    && entrada.getFechaHoraSalidaTemporal().isBefore(ahora.minusMinutes(MINUTOS_MAXIMOS_EN_ESPERA));
+            if (!vencida || consulta.getEstadoConsulta() == EstadoConsulta.CANCELADA
+                    || consulta.getEstadoConsulta() == EstadoConsulta.FINALIZADA) return;
+            finalizarChatsCancelados(chats);
+            entrada.setEstado(EstadoEntradaCola.CANCELADA);
             consulta.setEstadoConsulta(EstadoConsulta.CANCELADA);
             repoConsultasMedicas.save(consulta);
             repoEntradasCola.save(entrada);

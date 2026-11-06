@@ -1,6 +1,7 @@
 package com.pretriage.backend.services;
 
 import com.pretriage.backend.exceptions.ProveedorIaException;
+import com.pretriage.backend.exceptions.ProveedorIaException.Categoria;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -34,7 +35,7 @@ import java.util.function.LongSupplier;
 @EnableConfigurationProperties(GeminiChatProperties.class)
 public class GeminiJsonClient {
     private static final Logger log = LoggerFactory.getLogger(GeminiJsonClient.class);
-    private static final Set<Integer> RETRYABLE_STATUSES = Set.of(408, 500, 502, 503, 504);
+    private static final Set<Integer> RETRYABLE_STATUSES = Set.of(408, 429, 500, 502, 503, 504);
     private static final Set<String> FINISH_REASONS = Set.of("FINISH_REASON_UNSPECIFIED", "STOP", "MAX_TOKENS",
             "SAFETY", "RECITATION", "LANGUAGE", "OTHER", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII",
             "MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL", "TOO_MANY_TOOL_CALLS", "MALFORMED_RESPONSE");
@@ -81,12 +82,12 @@ public class GeminiJsonClient {
     public String generar(String systemPrompt, String input, Map<String, Object> schema, Duration maxWait) {
         long startedAt = nanoClock.getAsLong();
         Duration budget = maxWait.compareTo(properties.requestTimeout()) < 0 ? maxWait : properties.requestTimeout();
-        if (budget.isZero() || budget.isNegative()) throw failure("Plazo Gemini agotado");
+        if (budget.isZero() || budget.isNegative()) throw failure("Plazo Gemini agotado", Categoria.OPERACION_INTERNA);
         if (properties.apiKey() == null || properties.apiKey().isBlank()) {
-            throw failure("Gemini no configurado: falta GEMINI_API_KEY");
+            throw failure("Gemini no configurado: falta GEMINI_API_KEY", Categoria.CONFIGURACION);
         }
         String model = properties.model().replaceFirst("^models/", "");
-        if (!model.matches("[A-Za-z0-9._-]+")) throw failure("Modelo Gemini invalido");
+        if (!model.matches("[A-Za-z0-9._-]+")) throw failure("Modelo Gemini invalido", Categoria.CONFIGURACION);
 
         final URI endpoint;
         final String serializedBody;
@@ -115,48 +116,55 @@ public class GeminiJsonClient {
                 response = http.send(request, HttpResponse.BodyHandlers.ofString());
             } catch (InterruptedException error) {
                 Thread.currentThread().interrupt();
-                throw failure("Consulta Gemini interrumpida");
+                throw failure("Consulta Gemini interrumpida", Categoria.OPERACION_INTERNA);
             } catch (IOException error) {
                 long elapsedMs = elapsedMillis(startedAt);
                 if (!isRetryableTransport(error) || !canRetry(attempt, budget, startedAt)) {
                     log.warn("Gemini attempt={} status=transport-error elapsedMs={}", attempt, elapsedMs);
-                    throw failure("Fallo de transporte Gemini (" + error.getClass().getSimpleName() + ")",
-                            isRetryableTransport(error));
+                    Categoria categoria = isRetryableTransport(error)
+                            ? Categoria.API_NO_DISPONIBLE : Categoria.CONFIGURACION;
+                    throw failure("Fallo de transporte Gemini (" + error.getClass().getSimpleName() + ")", categoria);
                 }
                 Duration delay = backoff(attempt);
                 if (!waitBeforeRetry(attempt, "transport-error", delay, budget, startedAt)) {
-                    throw failure("Plazo Gemini agotado durante reintento");
+                    throw failure("Fallo de transporte Gemini (" + error.getClass().getSimpleName() + ")",
+                            Categoria.API_NO_DISPONIBLE);
                 }
                 continue;
             } catch (Exception error) {
-                throw failure("Fallo de transporte Gemini: " + error.getClass().getSimpleName(), false);
+                throw failure("Fallo de transporte Gemini: " + error.getClass().getSimpleName(),
+                        Categoria.OPERACION_INTERNA);
             }
 
             int status = response.statusCode();
             if (status == 200) return parseSuccess(response);
             Duration retryAfter = retryAfter(response);
-            boolean retryable = RETRYABLE_STATUSES.contains(status)
-                    || (status == 429 && retryAfter != null);
-            if (!retryable || !canRetry(attempt, budget, startedAt)) {
+            boolean apiUnavailable = status == 408 || status == 429 || status >= 500;
+            boolean retryable = RETRYABLE_STATUSES.contains(status) || (status == 429 && retryAfter != null);
+            if (!retryable) {
                 log.warn("Gemini attempt={} status={} elapsedMs={}", attempt, status, elapsedMillis(startedAt));
-                boolean workflowRetryable = retryable && status != 429
-                        && !(status == 503 && retryAfter != null);
-                throw failure("Gemini HTTP " + status, workflowRetryable);
+                Categoria categoria = apiUnavailable ? Categoria.API_NO_DISPONIBLE
+                        : (status >= 300 && status < 500 ? Categoria.CONFIGURACION : Categoria.OPERACION_INTERNA);
+                throw failure("Gemini HTTP " + status, categoria, status, retryAfter);
+            }
+            if (!canRetry(attempt, budget, startedAt)) {
+                log.warn("Gemini attempt={} status={} elapsedMs={} retry=exhausted", attempt, status, elapsedMillis(startedAt));
+                throw failure("Gemini HTTP " + status, Categoria.API_NO_DISPONIBLE, status, retryAfter);
             }
             Duration delay = retryAfter != null && (status == 429 || status == 503)
                     ? retryAfter : backoff(attempt);
             if (!waitBeforeRetry(attempt, Integer.toString(status), delay, budget, startedAt)) {
-                throw failure("Gemini HTTP " + status);
+                throw failure("Gemini HTTP " + status, Categoria.API_NO_DISPONIBLE, status, retryAfter);
             }
         }
-        throw failure("Reintentos Gemini agotados");
+        throw failure("Reintentos Gemini agotados", Categoria.OPERACION_INTERNA);
     }
 
     private String parseSuccess(HttpResponse<String> response) {
         try {
             var root = mapper.readTree(response.body());
             var candidates = root.path("candidates");
-            if (!candidates.isArray() || candidates.isEmpty()) throw failure("Gemini no devolvio candidatos");
+            if (!candidates.isArray() || candidates.isEmpty()) throw failure("Gemini no devolvio candidatos", Categoria.VALIDACION_RESPUESTA);
             var candidate = candidates.get(0);
             if (!"STOP".equals(candidate.path("finishReason").asText())) {
                 String reason = candidate.path("finishReason").asText("");
@@ -166,7 +174,7 @@ public class GeminiJsonClient {
                 throw failure("Gemini no completo la respuesta: finishReason=" + safeReason
                         + " outputTokens=" + usage.path("candidatesTokenCount").asLong(-1)
                         + " thoughtTokens=" + usage.path("thoughtsTokenCount").asLong(-1)
-                        + " maxOutputTokens=" + properties.maxOutputTokens());
+                        + " maxOutputTokens=" + properties.maxOutputTokens(), Categoria.VALIDACION_RESPUESTA);
             }
             StringBuilder output = new StringBuilder();
             for (var part : candidate.path("content").path("parts")) {
@@ -174,13 +182,13 @@ public class GeminiJsonClient {
                     output.append(part.path("text").stringValue());
                 }
             }
-            if (output.isEmpty()) throw failure("Gemini devolvio una respuesta vacia");
+            if (output.isEmpty()) throw failure("Gemini devolvio una respuesta vacia", Categoria.VALIDACION_RESPUESTA);
             return output.toString();
         } catch (ProveedorIaException error) {
             throw error;
         } catch (Exception error) {
             // Do not attach provider response bodies: they may contain clinical data.
-            throw failure("Fallo de formato Gemini");
+            throw failure("Fallo de formato Gemini", Categoria.VALIDACION_RESPUESTA);
         }
     }
 
@@ -212,7 +220,7 @@ public class GeminiJsonClient {
             return !remaining(budget, startedAt).isZero();
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
-            throw failure("Consulta Gemini interrumpida durante espera");
+            throw failure("Consulta Gemini interrumpida durante espera", Categoria.OPERACION_INTERNA);
         }
     }
 
@@ -273,12 +281,18 @@ public class GeminiJsonClient {
     }
 
     private ProveedorIaException failure(String message) {
-        return failure(message, false);
+        return failure(message, Categoria.OPERACION_INTERNA);
     }
 
-    private ProveedorIaException failure(String message, boolean transitorio) {
+    private ProveedorIaException failure(String message, Categoria categoria) {
         // Only caller-generated technical messages; never response bodies, URLs or credentials.
         log.warn("Gemini rejected reason={}", message);
-        return new ProveedorIaException(new IllegalStateException(message), transitorio);
+        return new ProveedorIaException(new IllegalStateException(message), categoria);
+    }
+
+    private ProveedorIaException failure(String message, Categoria categoria, Integer status, Duration retryAfter) {
+        // Only caller-generated technical messages; never response bodies, URLs or credentials.
+        log.warn("Gemini rejected reason={}", message);
+        return new ProveedorIaException(new IllegalStateException(message), categoria, status, retryAfter);
     }
 }

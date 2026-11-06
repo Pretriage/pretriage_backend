@@ -37,6 +37,13 @@ sector to wait in.
 
 ## Starting A Chat
 
+After a successful hospital selection (HTTP 204 from `POST /api/atencion/hospital`),
+the mobile app opens the chat directly, keeping Home underneath and removing the
+selection screens from the navigation stack. Leaving the chat returns to Home;
+the visually distinct "Chat interactivo" action reopens the same conversation
+without selecting a hospital again. A failed hospital selection does not navigate
+or clear the saved chat. Leaving the chat does not cancel the consultation.
+
 A patient can have several chats over time (`Chat.paciente` is `@ManyToOne`). `ChatService.iniciarChat`:
 
 1. **Blocks on pending attention**: if any `ConsultaMedica` of the patient has a linked chat and its `EntradaCola` is not `FINALIZADA`/`CANCELADA` (e.g. `EN_COLA`, `LLAMADO`, `EN_ESPERA`, `ATRASADO`, `EN_ATENCION`), responds `400` with a patient-facing message (`AtencionPendienteException`) and changes nothing. The check is anchored on the chat↔consultation link, not on any active `EntradaCola`: the entry is created when the hospital is selected (step 6), before the chat starts, so the normal flow is never blocked.
@@ -127,3 +134,14 @@ Patients can manage their medical study files (radiology scans, lab reports, etc
 ### Doctor Access
 
 During attention, doctors can view patient studies through the medical history endpoints documented in the API reference.
+
+## Recuperación y cierre parcial
+
+Texto, voz y clasificación final se recuperan desde trabajos persistidos. Si no
+se obtiene otra pregunta válida tras el presupuesto interno, la entrevista se
+cierra automáticamente y procesa los datos guardados. Una clasificación válida
+termina en `COMPLETADA`; de lo contrario queda `PARCIAL`, sin prioridad inventada.
+La consulta, la entrada de cola y su prioridad provisional se conservan. El
+paciente no necesita botones de cierre ni de reintento. Una caída real de la API
+permite espera temporal y reintentos automáticos con backoff. Ver
+[contratos, recuperación y compatibilidad](34-automatic-chat-recovery.md).

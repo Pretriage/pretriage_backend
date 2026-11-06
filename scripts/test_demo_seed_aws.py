@@ -145,6 +145,7 @@ class DemoSeedAwsTests(unittest.TestCase):
     def test_preflight_sql_checks_full_seed_contract_without_boolean_text_assumptions(self):
         names = _required_table_names()
         sql = _build_preflight_sql()
+        self.assertIn("obra_social", names)
         self.assertEqual(set(names), set(REQUIRED_TABLES) | {"coordenada"})
         self.assertIn(f"COUNT(*) = {len(names)}", sql)
         self.assertIn("to_regclass", sql)
@@ -195,6 +196,17 @@ class DemoSeedAwsTests(unittest.TestCase):
         for sql in ("DELETE FROM hospital;", "/* seed */ DROP TABLE hospital;", "INSERT INTO x(v) VALUES ('x'); TRUNCATE x;"):
             with self.subTest(sql=sql), self.assertRaises(DemoSeedAwsError):
                 target.execute(sql)
+
+    def test_complete_seed_with_shared_catalog_passes_execution_safeguards(self):
+        # The previous standalone catalog used ON COMMIT DROP, which is not
+        # permitted by the AWS seed executor. Validate the complete payload.
+        from scripts.demo_seed_data import build_sql
+        from scripts.test_demo_seed import fixture
+
+        sql = build_sql(*fixture())
+        target, _, _, _, _, s3 = make_target()
+        target.execute(sql)
+        self.assertEqual(sql, gzip.decompress(s3.put_calls[0]["Body"]).decode())
 
     def test_terminal_ssm_failure_cleans_only_exact_uploaded_version(self):
         target, _, _, _, _, s3 = make_target(command_status="Failed")

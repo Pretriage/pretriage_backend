@@ -1,5 +1,7 @@
 ﻿# E2E Chat Debugging
 
+> Política vigente desde el 5/11/2026: [recuperación automática y cierre parcial](34-automatic-chat-recovery.md). Las referencias siguientes a bloqueos técnicos terminales, `FALLIDA` y reintentos manuales describen comportamientos anteriores.
+
 `scripts/e2e_chat.py` exercises real login, backend endpoints, Gemini REST and PostgreSQL.
 Use synthetic messages and a disposable database: the seed cancels the test
 patient's existing consultations and deletes their previous chats and messages.
@@ -509,3 +511,28 @@ El historial del chat 42 se consultó sin modificarlo ni enviarlo a Gemini.
 El APK Android final se generó a las 14:59 -03:00 con la URL LAN existente; pasaron
 las 52 pruebas unitarias, sin fallos/errores/omisiones, y se detuvo Gradle. No se
 probó un teléfono ni se compiló iOS.
+
+## Recuperación automática del 5/11/2026
+
+El backend completó 792 pruebas aisladas: 773 aprobadas, 19 omitidas y cero
+fallos/errores. El runner usó una base desechable y la eliminó al terminar;
+el log de esta ejecución es `target/isolated-tests.log`.
+
+La validación Android con backend QA confirmó tanto la recuperación automática
+tras una indisponibilidad de API inyectada por el harness como la recuperación
+de un chat legado activo en `NO_DISPONIBLE`. También se verificó en la app el
+cierre parcial: el snapshot `PARCIAL` quedó finalizado con `cierreParcial=true`,
+siete mensajes únicos y sin composer, spinner ni acción de reintento. La consulta
+1 siguió vinculada al chat 1717 y conservó la misma entrada de cola, sector,
+prioridad 2 y orden 1 en `EN_COLA`; no se generaron `resultadoTriageJson` ni resumen.
+
+Durante la prueba se corrigió el polling móvil para que un snapshot `PENDIENTE`
+con `cierreParcial=true` no sustituya al snapshot terminal más reciente. La
+reconciliación usa `versionEstado`; pasaron 63 pruebas Android con el ajuste. El
+comportamiento vigente y sus campos están en
+[recuperación automática y cierre parcial](34-automatic-chat-recovery.md).
+
+Antes de iniciar esta versión contra una base PostgreSQL existente, aplicar
+`scripts/migrations/20261105_chat_recovery.sql`. La migración agrega columnas y
+el valor `PARCIAL` al CHECK de clasificación, que `ddl-auto=update` no garantiza
+actualizar.

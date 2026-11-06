@@ -413,19 +413,22 @@ Reusing a key with different content, or sending a new key while `PENDIENTE` or
 `NO_DISPONIBLE`, returns `409`. Invalid UUID format returns `400`.
 
 The backend processes the saved turn asynchronously. Clients poll GET; they do
-not replay the POST after losing its response. `ChatDTO` adds `estadoTurnoTexto`
+not replay the POST after losing its response. `ChatDTO` includes `estadoTurnoTexto`
 (`SIN_SOLICITAR`, `PENDIENTE`, `COMPLETADA`, `NO_DISPONIBLE`),
-`solicitudTurnoTextoId` and `intentosTurnoTexto`. State and messages survive screen
+`solicitudTurnoTextoId`, `intentosTurnoTexto`, `cierreParcial`, `estadoRecuperacion`,
+`proximoReintentoEn` and `versionEstado`. State and messages survive screen
 navigation and process restart. `COMPLETADA` describes the text turn; final triage
 must still be checked through `finalizado` and `estadoClasificacion`.
 See [durable text turns](24-durable-text-turns.md).
 
 Internally a verified turn uses `ChatTurnResponse` with `respuesta`,
 `atencionEstimada` and `origenRespuesta`; this is no longer the HTTP response body
-of this endpoint. When triage finalizes, the existing queue entry's priority is
-updated. When the bot finalizes, the patient's `ConsultaMedica` is linked to this chat
-(`ConsultaMedica.chat`, FK `consulta_medica.id_chat`); that link is what the hospital metrics
-count as "pretriage realizado". The final stored `Chat.resultadoTriageJson` includes
+of this endpoint. When a valid triage result finalizes, the existing queue entry's
+priority is updated. Partial classification preserves the provisional initial
+priority and queue position. When the bot finalizes, the patient's `ConsultaMedica`
+is linked to this chat (`ConsultaMedica.chat`, FK `consulta_medica.id_chat`); metrics
+count it as "pretriage realizado" only for `COMPLETADA` or a legacy null state with a
+stored result. The final stored `Chat.resultadoTriageJson` includes
 `origenClasificacion` with the source of that classification, plus backend-owned
 `seguimientoEntrevista` metadata containing closure reason and datum states/attempts
 (without duplicating values or citations). Historical results without it remain valid.
@@ -436,8 +439,14 @@ clarification, off-topic input a fixed redirection. These turns have
 Excluded patient text remains visible locally and counts toward technical resource
 limits, but is not resent as provider context or accepted as clinical evidence.
 Provider failures and invalid model responses are recorded by the asynchronous
-worker. A terminal failure sets `estadoTurnoTexto=NO_DISPONIBLE`; no local
-classification is created and new text/voice input is blocked.
+worker. Technical failures and provider outages use the durable policy in
+[automatic chat recovery](34-automatic-chat-recovery.md): internal failures follow
+the persisted workflow budget; typed transient API outages use persisted backoff
+until recovery or consultation invalidation. `NO_DISPONIBLE` remains a client
+cache/compatibility state, not a terminal server failure. If interviewing cannot
+continue, saved answers are closed and classification is attempted from available
+facts. Failure to obtain a valid classification ends in `PARCIAL`, without an AI
+result or queue-priority update.
 During interviewing, Gemini receives a question schema (`mensaje`, `estadoEntrada`); the
 backend decides when to request final classification. The internal continuation
 input also carries backend-generated `objetivoDelTurno` (type, canonical symptom
@@ -461,13 +470,11 @@ response uses `origenRespuesta=CIERRE_SIN_DATOS`, `atencionEstimada=null`,
 No result or queue update is created. Clients synchronize GET after that origin;
 they must not infer `COMPLETADA` from interview closure alone. See
 [closure by resolved data](21-cierre-por-datos-resueltos.md).
-Transient REST failures have [bounded automatic retries](19-gemini-retries.md):
-two HTTP attempts per Gemini invocation by default, sharing the turn's 45-second
-budget with semantic verification and any correction. A typed transient failure
-permits one further workflow attempt against the saved patient message, with a
-persisted two-attempt budget. If interviewing still fails, the message remains
-saved and the assistant becomes `NO_DISPONIBLE`; the patient does not resend it.
-Final-classification failure retains its clinical closure state and no result.
+Historical retry details are in [Gemini REST retries](19-gemini-retries.md).
+Current recovery, including retry budgets and durable API backoff, is defined in
+[automatic chat recovery](34-automatic-chat-recovery.md). The patient does not
+resend a saved message; final-classification exhaustion closes as `PARCIAL` with no
+result or queue-priority update.
 Existing
 historical chat results may still contain `FALLBACK_LOCAL` or `OLLAMA`.
 For a final result requiring immediate attention, `respuesta.contenido` includes
@@ -498,35 +505,35 @@ or the client left the screen while the provider was answering.
 
 ### Retry Processing a Closed Interview
 
-This endpoint remains for compatibility. Current mobile does not expose a
-reprocessing button: newly closed voice interviews and transient final text
-classification failures are recovered by the backend with a persisted, bounded
-budget. Their state remains `PENDIENTE` until completion, administrative closure or
-terminal failure. Automatic work never replays a patient message. See
-[server-owned closure and recovery](23-server-owned-voice-closure.md).
+This endpoint remains for compatibility with legacy chats in state `FALLIDA`.
+Current mobile does not expose a reprocessing button. New voice closures and final
+text classification work are recovered by the backend; automatic API outage retries
+use persisted backoff, while internal failures follow the workflow budget. Automatic
+work never replays a patient message. See [automatic chat recovery](34-automatic-chat-recovery.md).
 
 ```http
 POST /api/chat/{id}/clasificacion
 ```
 
 Authenticated patient, no request body. Processes saved answers without adding a
-message. Requires the caller's latest chat in `FALLIDA` classification state.
+message. Requires the caller's latest chat in legacy `FALLIDA` classification state.
 An owned automatic `PENDIENTE` job is not accepted by this public retry endpoint.
 Returns `200 ChatTurnResponse` on success; only a valid Gemini result updates the
 queue. Completed/open/historical chats are rejected with `ChatFinalizadoException`
 (`400`); another patient's chat is not accessible. Concurrent retries are serialized
-by a database row lock. Provider failure retains a closed `FALLIDA` interview.
-The backend may make one bounded correction request after an invalid final classification;
-if the correction also fails, the response remains `FALLIDA` and no triage result or queue
-entry is created. A verified semantic rejection may provide only a safe category to guide
-that correction; arbitrary verifier text is not exposed.
+by a database row lock. New failures are handled by automatic recovery and close as
+`PARCIAL` without a result when no valid classification can be produced. This endpoint
+retains `FALLIDA` handling for legacy compatibility only.
 
-`GET /api/chat/{id}` and chat creation now include additive `estadoClasificacion`:
-`NO_SOLICITADA`, `PENDIENTE`, `COMPLETADA` or `FALLIDA`. `finalizado=true` means the
-interview is closed, including when processing failed. It no longer guarantees a
-stored classification. After closure, `POST /mensajes` rejects an additional `ok`;
-current mobile follows backend-owned processing with GET. No clinical priority is
-fabricated on failure and the receptionist form fallback is unaffected.
+`GET /api/chat/{id}` and chat creation include `estadoClasificacion`:
+`NO_SOLICITADA`, `PENDIENTE`, `COMPLETADA`, legacy `FALLIDA`, or `PARCIAL`;
+`cierreParcial` marks partial closure. `estadoRecuperacion` is `SIN_RECUPERACION`,
+`REINTENTANDO`, or `ESPERANDO_API`; `proximoReintentoEn` is nullable, and
+`versionEstado` increases on confirmed state transitions. `finalizado=true` means
+the interview is closed, not that it has a stored classification. After closure,
+`POST /mensajes` rejects additional input; clients follow backend-owned processing
+with GET. No clinical priority is fabricated on failure and the receptionist form
+fallback is unaffected.
 
 ### Voice Chat (Gemini Live)
 
@@ -572,17 +579,23 @@ Server -> client:
   is optional: it is absent when the backend recovers a missing Live tool call
   using the saved transcript and the existing final-classification processor.
 - `{"tipo":"triage_finalizado","respuesta":MensajeDTO,"atencionEstimada":...,"origenRespuesta":...}`:
-  Gemini REST preclassification, same meaning as the final
+  Gemini REST classification succeeded, with the same meaning as the final
   internal `ChatTurnResponse` used to persist a completed text turn.
+- `{"tipo":"estado_chat","chat":ChatDTO}`: the canonical chat snapshot while
+  server-owned processing continues or recovers. `ChatDTO` includes
+  `estadoClasificacion`, `cierreParcial`, `estadoRecuperacion`,
+  `proximoReintentoEn` and `versionEstado`.
+- `{"tipo":"procesamiento_finalizado","chat":ChatDTO}`: classification ended
+  without a valid AI result; the snapshot carries `estadoClasificacion=PARCIAL`.
 - `{"tipo":"fin"}`: session over; the server then closes the WebSocket.
 
 Keep the backend socket open after `entrevista_finalizada`: classification is
-still pending. `triage_finalizado` is sent only after normal Gemini transport
-closure and successful classification/persistence. If that closure cannot be
-confirmed after interview closure, the backend attempts to save the received
-transcript as closed with classification `FALLIDA` and emits `error` and `fin`;
-they do not imply a completed classification. A rejected summary keeps
-the interview open and does not emit `entrevista_finalizada`.
+still pending. `triage_finalizado` is sent only after successful classification
+and persistence. A partial outcome sends `procesamiento_finalizado` with the
+authoritative snapshot; clients can still GET the chat after reconnecting. Legacy
+`FALLIDA` may be present in historical records, while current failed processing
+closes as `PARCIAL`. A rejected summary keeps the interview open and does not emit
+`entrevista_finalizada`.
 
   When shared progress is terminal, one tool-call reminder plus bounded timers
   can recover closure without another patient response. This applies to resolved
@@ -787,7 +800,13 @@ GET /api/medico/sesiones/{sesionId}/consultas/{consultaId}/pretriaje
 
 Available only to the doctor/session that owns an `EN_ATENCION` consultation.
 Returns the normalized clinical summary, preliminary and effective priorities,
-and `PENDIENTE`, `CONFIRMADA`, or `CORREGIDA` review state.
+and `PENDIENTE`, `CONFIRMADA`, or `CORREGIDA` review state. It also returns
+`estadoClasificacion`, `cierreParcial`, and the literal `mensajesConversacion`.
+When a chat closed partially without a valid AI result, `resumenClinico` is null,
+`estadoClasificacion` is `PARCIAL`, and the doctor sees the conversation in the
+same consultation view. The queue's initial priority is provisional in that case;
+the existing doctor review remains available. Authorization remains limited to
+the owning active session and its `EN_ATENCION` consultation.
 
 ### Confirm Or Correct Priority
 
@@ -1285,7 +1304,7 @@ GET /api/admin/hospitales/{hospitalId}/metricas?desde=2026-09-01&hasta=2026-09-3
 
 Query params (both required, ISO `yyyy-MM-dd`, inclusive): `desde`, `hasta`. They are converted to `[desde 00:00, hasta+1 00:00)`. `desde > hasta` → `400` (`IllegalArgumentException`); missing or malformed dates → `400`.
 
-**Funnel semantics**: every metric is anchored on `EntradaCola.fechaHoraIngreso` of the hospital's queues inside the range. `pacientesAtendidos` are, among those entries, the ones whose `AtencionMedica` is `FINALIZADA` (even if it finished after `hasta`). Patients who entered near the end of the period and were not yet attended count as `pacientesNoAtendidos`. Wait time = `AtencionMedica.fechaHoraInicio - EntradaCola.fechaHoraIngreso`, averaged only over attended patients. "Pretriage realizado" = `ConsultaMedica.chat IS NOT NULL` (chatbot finished and queued the patient); reception admissions and aborted chats count as not done. Consultations created before this feature have no linked chat and count as not done. To compare periods, call the endpoint twice with different ranges.
+**Funnel semantics**: every metric is anchored on `EntradaCola.fechaHoraIngreso` of the hospital's queues inside the range. `pacientesAtendidos` are, among those entries, the ones whose `AtencionMedica` is `FINALIZADA` (even if it finished after `hasta`). Patients who entered near the end of the period and were not yet attended count as `pacientesNoAtendidos`. Wait time = `AtencionMedica.fechaHoraInicio - EntradaCola.fechaHoraIngreso`, averaged only over attended patients. "Pretriage realizado" counts chats classified `COMPLETADA`, plus legacy rows whose classification state is null and whose `resultadoTriageJson` is present. Partial, failed, pending, reception-only and unlinked consultations count in `pretriageNoRealizado`. `distribucionGravedadBot` only counts valid completed AI classifications; its explicit `SIN_CLASIFICACION_IA` bucket includes every queue arrival without one, so provisional `NORMAL` is not presented as an AI result. Medical and operational metrics continue to count all arrivals. To compare periods, call the endpoint twice with different ranges.
 
 Canonical `200` response:
 
@@ -1301,10 +1320,11 @@ Canonical `200` response:
   "porcentajeAtendidos": 70.0,
   "distribucionGravedadBot": [
     { "nivel": "RIESGO_VITAL_INMEDIATO", "cantidad": 3,  "porcentaje": 5.0 },
-    { "nivel": "MUY_URGENTE",            "cantidad": 7,  "porcentaje": 11.7 },
-    { "nivel": "URGENTE",                "cantidad": 20, "porcentaje": 33.3 },
-    { "nivel": "NORMAL",                 "cantidad": 22, "porcentaje": 36.7 },
-    { "nivel": "NO_URGENTE",             "cantidad": 8,  "porcentaje": 13.3 }
+    { "nivel": "MUY_URGENTE",            "cantidad": 6,  "porcentaje": 10.0 },
+    { "nivel": "URGENTE",                "cantidad": 15, "porcentaje": 25.0 },
+    { "nivel": "NORMAL",                 "cantidad": 15, "porcentaje": 25.0 },
+    { "nivel": "NO_URGENTE",             "cantidad": 6,  "porcentaje": 10.0 },
+    { "nivel": "SIN_CLASIFICACION_IA",    "cantidad": 15, "porcentaje": 25.0 }
   ],
   "distribucionGravedadMedico": [
     { "nivel": "RIESGO_VITAL_INMEDIATO", "cantidad": 2,  "porcentaje": 3.3 },
@@ -1333,10 +1353,10 @@ Canonical `200` response:
 | `pacientesNoAtendidos` | integer ≥ 0 | no | `ingresaronACola - pacientesAtendidos`. |
 | `esperaPromedioMinutos` | number (1 decimal) | yes | `null` when `pacientesAtendidos = 0`. |
 | `porcentajeAtendidos` | number 0–100 (1 decimal) | yes | `null` when `ingresaronACola = 0`. |
-| `distribucionGravedadBot` | array of `{nivel, cantidad, porcentaje}` | no | Always the 5 `NivelDeGravedad` values in declaration order, from `ConsultaMedica.nivelDeGravedadBot`. |
+| `distribucionGravedadBot` | array of `{nivel, cantidad, porcentaje}` | no | The 5 `NivelDeGravedad` values from valid completed AI results, plus `SIN_CLASIFICACION_IA` last for partial/unclassified arrivals. Shares use all queue arrivals as denominator. |
 | `distribucionGravedadMedico` | array of `{nivel, cantidad, porcentaje}` | no | Same 5 levels from `nivelDeGravedadMedico` + `SIN_REVISION` last (no doctor review yet). |
 | `…[].porcentaje` | number 0–100 (1 decimal) | yes | `null` when `ingresaronACola = 0`. |
-| `pretriageRealizado` / `pretriageNoRealizado` | integer ≥ 0 | no | `ConsultaMedica.chat` not null / null. |
+| `pretriageRealizado` / `pretriageNoRealizado` | integer ≥ 0 | no | Completed AI classification (including legacy null state with non-null result) / its complement. |
 | `porcentajePretriageRealizado` | number 0–100 (1 decimal) | yes | `null` when `ingresaronACola = 0`. |
 | `serieDiaria` | array of `{fecha, ingresados, atendidos, esperaPromedioMinutos}` | no | One item per calendar day `desde..hasta` ascending, zero-filled; grouped by the day of `fechaHoraIngreso`; `esperaPromedioMinutos` is `null` on days without attended patients. |
 

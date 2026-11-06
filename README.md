@@ -161,7 +161,7 @@ python scripts/test_aws_container.py --build
 ## Integración continua
 
 GitHub Actions ejecuta `.github/workflows/ci.yml` en pull requests y pushes a
-`desarrollo` y `main`. El check `Backend CI / build-and-test` levanta un PostgreSQL
+`desarrollo`, `main` y `produccion`. El check `Backend CI / build-and-test` levanta un PostgreSQL
 aislado, desactiva el arranque automático de Docker Compose dentro de Spring y
 ejecuta:
 
@@ -172,3 +172,6 @@ ejecuta:
 Configurar `Backend CI / build-and-test` como status check obligatorio en las
 reglas de protección de `desarrollo` y `main` evita integrar una rama mientras la
 compilación o las pruebas estén pendientes o fallen.
+
+La demo EC2 tiene [horarios diarios de encendido y apagado](docs/33-aws-instance-schedule.md)
+a las 10:00 y 22:00 de Buenos Aires; son independientes del pipeline.

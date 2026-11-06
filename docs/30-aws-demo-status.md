@@ -1,7 +1,16 @@
 # Estado de la demo AWS
 
-Estado verificado el 31/10/2026. El backend está **en ejecución** por pedido del
-usuario; el frontend se desplegó correctamente en Amplify.
+Última operación verificada el **05/11/2026**: carga integral aplicada, acceso
+comprobado para las 29 cuentas demo, catálogo de 16 obras sociales y tableros
+con datos de los 8 hospitales. Ver [datos y validaciones](#datos-y-validaciones).
+
+## Infraestructura histórica del 31/10/2026
+
+Estado de infraestructura verificado el 31/10/2026. El backend estaba **en
+ejecución** por pedido del usuario; el frontend se había desplegado
+correctamente en Amplify. La sección de infraestructura y la imagen ECR de
+abajo se conservan como referencia histórica de esa fecha, no como descripción
+de la imagen actualmente desplegada.
 `app.pretriage.com.ar` responde por HTTPS con certificado válido y Amplify
 informa `AVAILABLE`.
 
@@ -13,7 +22,7 @@ encendida y volvió a arrancar. Está **RUNNING**, SSM está Online y
 con estado `UP`. La Elastic IP y el almacenamiento continúan facturándose; el
 cómputo también se factura mientras EC2 permanezca encendida.
 
-## Componentes desplegados
+## Componentes desplegados (referencia histórica del 31/10/2026)
 
 | Componente | Estado |
 | --- | --- |
@@ -23,7 +32,7 @@ cómputo también se factura mientras EC2 permanezca encendida.
 | Contenedores | El inicio automático por `pretriage.service` completó sin intervención manual: PostgreSQL 18 y backend `healthy`, Caddy en ejecución |
 | Acceso operativo | SSM Online; sin acceso SSH configurado |
 | S3 | `pretriage-demo-clinicalfilesbucket-45qsffs15mc2`, privado, cifrado SSE-S3 y versionado; la instancia accede mediante su rol |
-| ECR | `827641190526.dkr.ecr.us-east-1.amazonaws.com/pretriage-demo-backendimagerepository-92vmgwg0evhc:demo-e153b1f`; digest `sha256:38f3d3209a6f4f04a12dfc65bd3c19586b4071b8bdf34537b59604927d09921b` |
+| ECR (imagen documentada al 31/10; histórica) | `827641190526.dkr.ecr.us-east-1.amazonaws.com/pretriage-demo-backendimagerepository-92vmgwg0evhc:demo-e153b1f`; digest `sha256:38f3d3209a6f4f04a12dfc65bd3c19586b4071b8bdf34537b59604927d09921b` |
 | API | Tras el arranque en frío, `https://api.pretriage.com.ar/actuator/health/readiness` respondió HTTP `200` y `UP` por Cloudflare; SSL/TLS Full (strict) y proxy DNS habilitados |
 
 El usuario eligió una Elastic IP para conservar la dirección pública al detener
@@ -52,11 +61,12 @@ tienen permisos `600`; el certificado público tiene permisos `644`.
 
 ## Repositorios
 
-Los cambios de backend y frontend fueron publicados en la rama `desarrollo` de
-sus respectivos repositorios. El código del backend desplegado corresponde al commit
-`e153b1f4369ac6f60d922a0a6864e9b0c76a49d1`; el frontend, en el commit
-`2732268ed9734e02654e2eb8b5e1d9790113dae4`. La imagen ECR desplegada corresponde al commit de backend
-`e153b1f`.
+Los cambios de backend y frontend que se documentaron el 31/10/2026 se habían
+publicado en la rama `desarrollo` de sus respectivos repositorios. En ese
+registro, el backend desplegado correspondía al commit
+`e153b1f4369ac6f60d922a0a6864e9b0c76a49d1` y el frontend al commit
+`2732268ed9734e02654e2eb8b5e1d9790113dae4`. La imagen ECR de ese despliegue
+histórico correspondía al commit de backend `e153b1f`.
 
 Los checks de GitHub Actions del código publicado pasaron en
 [backend](https://github.com/MatiasCanevaro/pretriage_backend/actions/runs/41233853414)
@@ -107,16 +117,48 @@ El archivo local, excluido de Git, es
 
 ## Datos y validaciones
 
-En la verificación del 31/10 no se cargaron usuarios ni datos clínicos y la base
-contenía el catálogo inicial de especialidades. Posteriormente se agregaron
-scripts SQL manuales al repositorio. El 04/11 se verificaron desde Android el
-acceso autenticado, perfil, visualización de un estudio, especialidades y mapa;
-la API devolvió cero hospitales disponibles y cero obras sociales. Las pruebas
-de consulta y chat quedan pendientes de un escenario de atención disponible.
-El script de seed de demo está preparado y pasó pruebas aisladas de generación
-y persistencia PostgreSQL; su ejecución en Auth0 y AWS sigue diferida por pedido
-del usuario. Publicarlo no aplica datos. Ver
+### Actualización del 05/11/2026
+
+La carga AWS de demo se aplicó con `seed_key` `demo-caba-v1`, después de renovar
+la sesión AWS. EC2 ya estaba encendida por su horario diario y no se inició ni
+detuvo durante esta tarea. PostgreSQL confirmó 8 hospitales, 16 obras sociales,
+29 identidades Auth0 nuevas, 32 filas `usuario_auth` (se conservaron 3), 646
+pacientes (640 históricos, 3 asociados a cuentas demo y 3 previos), 2.600
+consultas y entradas de cola, 2.208 atenciones finalizadas, 392 canceladas,
+1.716 chats con pretriage, 40 sectores, 80 salas, 32 membresías, 16 sesiones
+activas en Clínica Médica y Traumatología, y 480 sesiones históricas finalizadas.
+El periodo de datos es 06/10–04/11/2026.
+
+Las comprobaciones por API confirmaron que `GET /api/obrasocial` devuelve 16 y
+que una cuenta de administración hospitalaria puede consultar métricas de los
+ocho hospitales para ese periodo. La API devolvió 2.600 ingresos, 2.208
+atendidos, 392 no atendidos y 1.716 con pretriage. Pasaron 38 pruebas Python.
+
+El backup PostgreSQL previo a la carga se conserva en EC2 como
+`/opt/pretriage/backups/pre-seed-20261105.XSUICz.sql.gz`, con modo `600` y gzip
+verificado. Se eliminó la versión exacta del objeto temporal S3 usado para la
+carga. El estado privado de Auth0 está en
+`target/demo-seed/demo-caba-v1/state.json` y tiene una copia duradera con ACL
+solo para el usuario en
+`C:/Users/valen/.pretriage/demo-seed/demo-caba-v1/state.json`; el archivo
+incluye secretos y no debe copiarse a logs ni repositorios.
+
+El primer intento de `--verify-logins` recibió HTTP 403 con el agente genérico
+de Python. Tras identificar el cliente como `PretriageDemoSeed/1.0`, las 29
+cuentas completaron el login por HTTPS y devolvieron el subject esperado.
+No se ejecutaron pruebas de consulta ni voz con Gemini durante esta carga;
+el escenario ya dispone de médicos demo activos para realizarlas. Ver
 [guía de carga de datos sintéticos](31-demo-data-seeding.md).
+
+### Historial de validaciones al 31/10/2026
+
+En la verificación del 31/10 no se habían cargado usuarios ni datos clínicos y
+la base contenía el catálogo inicial de especialidades. El 04/11 se verificaron
+desde Android el acceso autenticado, perfil, visualización de un estudio,
+especialidades y mapa; la API devolvió cero hospitales disponibles y cero obras
+sociales. Posteriormente se agregaron scripts SQL manuales al repositorio. La
+prueba de seed descrita entonces cubría generación aislada y persistencia
+PostgreSQL antes de la aplicación real del 05/11.
 
 La plantilla pasó `cfn-lint` y las comprobaciones seleccionadas de `cfn-guard`;
 dos patrones estructurales produjeron falsos positivos documentados. CloudTrail
@@ -135,6 +177,11 @@ cifrado AES256. Se retiraron el objeto de prueba, sus versiones y marcadores
 de borrado; no se tocaron archivos de la aplicación.
 
 ## Operación y costos
+
+EventBridge Scheduler administra ahora los [horarios diarios](33-aws-instance-schedule.md):
+encendido a las 10:00 y apagado a las 22:00, hora de Buenos Aires, todos los días.
+Una parada manual conserva esos horarios; para mantener apagada la demo hay que
+deshabilitarlos antes del siguiente encendido.
 
 Consultar el estado y operar la instancia con el script documentado en
 [despliegue del backend](28-aws-demo-deployment.md):

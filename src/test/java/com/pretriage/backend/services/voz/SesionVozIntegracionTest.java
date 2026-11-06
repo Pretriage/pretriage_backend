@@ -98,7 +98,7 @@ class SesionVozIntegracionTest {
     }
 
     @Test
-    void falloDeGeminiCierraLaEntrevistaYGuardaTranscripcionUnaVezSinActualizarCola() throws Exception {
+    void falloDeGeminiDejaClasificacionVozPendienteConTranscripcionYJobDurable() throws Exception {
         Flujo flujo = new Flujo();
         when(flujo.ia.consultar(anyString(), anyString(), anyBoolean()))
                 .thenThrow(new IllegalStateException("sin cuota"));
@@ -106,12 +106,12 @@ class SesionVozIntegracionTest {
         flujo.completarEntrevista();
         flujo.finalizar(resumen());
         flujo.terminarGemini();
-        assertTrue(flujo.chat.isFinalizado());
-        assertEquals(EstadoClasificacionChat.FALLIDA, flujo.chat.getEstadoClasificacion());
+        assertPendingRecovery(flujo, false, 1);
         assertNull(flujo.chat.getResultadoTriageJson());
-        assertTrue(flujo.canal.contiene("error"));
         assertFalse(flujo.canal.contiene("triage_finalizado"));
         assertEquals(3, flujo.chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.PACIENTE).count());
+        assertPatientMessages(flujo, "Me duele la cabeza desde ayer.",
+                "El dolor es 2/10 y se mantiene.", "No, no tengo más síntomas.");
         assertFalse(flujo.chat.getMensajes().stream()
                 .anyMatch(m -> m.getAutor() == AutorMensaje.BOT && m.getContenido().equals("Listo")));
         verify(flujo.ia, times(1)).consultar(anyString(), anyString(), anyBoolean());
@@ -119,7 +119,7 @@ class SesionVozIntegracionTest {
     }
 
     @Test
-    void falloTecnicoEnPreflightSinDatosClinicosPersisteElSnapshotComoFallido() throws Exception {
+    void falloTecnicoEnPreflightPersisteVozLiteralYEncolaClasificacionAutomatica() throws Exception {
         Flujo flujo = new Flujo();
         when(flujo.ia.consultarAlcance(anyString(), any()))
                 .thenThrow(new ProveedorIaException(new IllegalStateException("sin cuota")));
@@ -127,14 +127,15 @@ class SesionVozIntegracionTest {
         flujo.finalizar(resumen());
         flujo.terminarGemini();
 
-        assertTrue(flujo.chat.isFinalizado());
-        assertEquals(EstadoClasificacionChat.FALLIDA, flujo.chat.getEstadoClasificacion());
+        assertPendingRecovery(flujo, true, 0);
         assertNull(flujo.chat.getResultadoTriageJson());
         assertEquals(1, flujo.chat.getMensajes().stream()
                 .filter(mensaje -> mensaje.getAutor() == AutorMensaje.PACIENTE).count());
         assertTrue(flujo.chat.getMensajes().stream()
                 .anyMatch(mensaje -> mensaje.getAutor() == AutorMensaje.PACIENTE
                         && mensaje.getContenido().equals("No quiero seguir respondiendo.")));
+        assertPatientMessages(flujo, "No quiero seguir respondiendo.");
+        assertFalse(flujo.canal.contiene("triage_finalizado"));
         verify(flujo.ia, times(1)).consultarAlcance(anyString(), any());
         verify(flujo.ia, never()).consultar(anyString(), anyString(), anyBoolean());
         verifyNoInteractions(flujo.cola);
@@ -168,7 +169,7 @@ class SesionVozIntegracionTest {
     }
 
     @Test
-    void falloNoTransitorioRestTrasNoToolDejaFALLIDASinActualizarLaCola() throws Exception {
+    void falloInternoRestTrasCierreAutomaticoDejaJobPendienteSinClasificarLaCola() throws Exception {
         Flujo flujo = new Flujo();
         when(flujo.ia.consultar(anyString(), anyString(), anyBoolean()))
                 .thenThrow(new ProveedorIaException(new IllegalStateException("sin cuota")));
@@ -181,11 +182,12 @@ class SesionVozIntegracionTest {
         flujo.sesion.alCerrar(1000, "fin");
 
         assertTrue(flujo.canal.cerrado.await(3, TimeUnit.SECONDS));
-        assertTrue(flujo.chat.isFinalizado());
-        assertEquals(EstadoClasificacionChat.FALLIDA, flujo.chat.getEstadoClasificacion());
+        assertPendingRecovery(flujo, false, 1);
         assertNull(flujo.chat.getResultadoTriageJson());
         assertFalse(flujo.canal.contiene("triage_finalizado"));
         assertEquals(3, flujo.chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.PACIENTE).count());
+        assertPatientMessages(flujo, "Me duele la cabeza desde ayer.",
+                "El dolor es 2/10 y se mantiene.", "No, no tengo más síntomas.");
         assertFalse(flujo.chat.getMensajes().stream()
                 .anyMatch(m -> m.getAutor() == AutorMensaje.BOT && m.getContenido().equals("Listo")));
         verify(flujo.ia, times(1)).consultar(anyString(), anyString(), anyBoolean());
@@ -218,6 +220,39 @@ class SesionVozIntegracionTest {
         assertTrue(flujo.chat.getMensajes().stream().anyMatch(m -> m.getContenido().contains("No puedo comer")));
         verify(flujo.ia, times(1)).consultar(anyString(), contains("vacío en el pecho"), eq(true));
         verify(flujo.cola, times(1)).finalizarTriageEIngresarACola(eq("auth0|voz"), any(), anyString(), any(Chat.class));
+    }
+
+    private void assertPendingRecovery(Flujo flujo, boolean cierreParcial, int intentos) throws Exception {
+        assertTrue(flujo.chat.isFinalizado());
+        assertEquals(EstadoClasificacionChat.PENDIENTE, flujo.chat.getEstadoClasificacion());
+        assertEquals(cierreParcial, flujo.chat.isCierreParcial());
+        assertTrue(flujo.chat.isRecuperacionAutomaticaClasificacion());
+        assertTrue(flujo.chat.isClasificacionAutomaticaVoz());
+        assertEquals(intentos, flujo.chat.getIntentosClasificacionAutomaticos());
+        assertEquals(EstadoRecuperacionChat.REINTENTANDO, flujo.chat.getEstadoRecuperacion());
+        assertNotNull(flujo.chat.getProximoReintentoEn());
+        assertNull(flujo.chat.getResultadoTriageJson());
+        assertTrue(flujo.canal.contiene("estado_chat"));
+        assertFalse(flujo.canal.contiene("procesamiento_finalizado"));
+        String evento = flujo.canal.eventos.stream()
+                .filter(json -> {
+                    try {
+                        return "estado_chat".equals(mapper.readTree(json).path("tipo").asText());
+                    } catch (Exception ignored) {
+                        return false;
+                    }
+                })
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Falta snapshot estado_chat: " + flujo.canal.eventos));
+        assertEquals("PENDIENTE", mapper.readTree(evento).path("chat").path("estadoClasificacion").asText());
+    }
+
+    private void assertPatientMessages(Flujo flujo, String... expected) {
+        List<String> persisted = flujo.chat.getMensajes().stream()
+                .filter(mensaje -> mensaje.getAutor() == AutorMensaje.PACIENTE)
+                .map(Mensaje::getContenido)
+                .toList();
+        assertTrue(persisted.containsAll(List.of(expected)), "Turnos literales perdidos: " + persisted);
     }
 
     private TriageResultDTO clasificacion(int dolor, int prioridad) {

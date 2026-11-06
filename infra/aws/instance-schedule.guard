@@ -1,0 +1,31 @@
+let schedules = Resources.*[ Type == 'AWS::Scheduler::Schedule' ].Properties
+let trust = Resources.SchedulerRole.Properties.AssumeRolePolicyDocument.Statement[0]
+let permission = Resources.SchedulerRole.Properties.Policies[0].PolicyDocument.Statement[0]
+
+rule SCHEDULES_USE_LOCAL_DAILY_HOURS {
+  Resources.StartSchedule.Properties.ScheduleExpression == 'cron(0 10 * * ? *)'
+  Resources.StopSchedule.Properties.ScheduleExpression == 'cron(0 22 * * ? *)'
+  %schedules.ScheduleExpressionTimezone == 'America/Argentina/Buenos_Aires'
+  %schedules.FlexibleTimeWindow.Mode == 'OFF'
+  %schedules.State.Ref == 'ScheduleState'
+  %schedules.Target.RetryPolicy.MaximumEventAgeInSeconds == 300
+  %schedules.Target.RetryPolicy.MaximumRetryAttempts == 2
+}
+
+rule TARGETS_ONLY_OPERATE_THE_CONFIGURED_INSTANCE {
+  Resources.StartSchedule.Properties.Target.Arn.'Fn::Sub' == 'arn:${AWS::Partition}:scheduler:::aws-sdk:ec2:startInstances'
+  Resources.StopSchedule.Properties.Target.Arn.'Fn::Sub' == 'arn:${AWS::Partition}:scheduler:::aws-sdk:ec2:stopInstances'
+  %schedules.Target.Input.'Fn::Sub' == '{"InstanceIds":["${InstanceId}"]}'
+  %schedules.Target.RoleArn.'Fn::GetAtt' == 'SchedulerRole.Arn'
+  %permission.Effect == 'Allow'
+  %permission.Action[*] IN ['ec2:StartInstances', 'ec2:StopInstances']
+  %permission.Resource.'Fn::Sub' == 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${InstanceId}'
+}
+
+rule SCHEDULER_TRUST_IS_PROJECT_AND_GROUP_SCOPED {
+  %trust.Effect == 'Allow'
+  %trust.Principal.Service == 'scheduler.amazonaws.com'
+  %trust.Action == 'sts:AssumeRole'
+  %trust.Condition.StringEquals.'aws:SourceAccount'.Ref == 'AWS::AccountId'
+  %trust.Condition.ArnEquals.'aws:SourceArn'.'Fn::GetAtt' == 'ScheduleGroup.Arn'
+}

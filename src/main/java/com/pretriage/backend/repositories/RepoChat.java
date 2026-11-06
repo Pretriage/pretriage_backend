@@ -36,15 +36,37 @@ public interface RepoChat extends JpaRepository<Chat, Long> {
 
     @Query("select c.id, c.paciente.usuarioAuth.id, c.clasificacionAutomaticaVoz from Chat c where c.finalizado = true " +
             "and c.recuperacionAutomaticaClasificacion = true and c.estadoClasificacion = :estado " +
+            "and (c.proximoReintentoEn is null or c.proximoReintentoEn <= :ahora) " +
+            "and (c.clasificacionAutomaticaEnCurso is null or c.clasificacionAutomaticaEnCurso = false " +
+            "or c.clasificacionIniciadaEn is null or c.clasificacionIniciadaEn < :antesDe) " +
             "order by c.id")
     List<Object[]> findAutomaticClassificationRecoveryCandidates(
-            @Param("estado") com.pretriage.backend.model.chat.EstadoClasificacionChat estado);
+            @Param("estado") com.pretriage.backend.model.chat.EstadoClasificacionChat estado,
+            @Param("ahora") java.time.LocalDateTime ahora, @Param("antesDe") java.time.LocalDateTime antesDe);
 
-    @Query("select c.id, c.paciente.usuarioAuth.id, c.solicitudTurnoTextoId from Chat c where c.estadoTurnoTexto = :estado " +
+    @Query("select c.id, c.paciente.usuarioAuth.id, c.solicitudTurnoTextoId from Chat c where c.finalizado = false and " +
+            "(c.estadoTurnoTexto = :estado or (c.estadoTurnoTexto = com.pretriage.backend.model.chat.EstadoTurnoTexto.NO_DISPONIBLE " +
+            "and c.estadoRecuperacion = com.pretriage.backend.model.chat.EstadoRecuperacionChat.ESPERANDO_API)) " +
+            "and (c.proximoReintentoEn is null or c.proximoReintentoEn <= :ahora) " +
             "and c.solicitudTurnoTextoId is not null and (c.turnoTextoEnCurso = false " +
             "or c.turnoTextoEnCurso is null or c.turnoTextoIniciadoEn is null or c.turnoTextoIniciadoEn < :antesDe) " +
             "order by c.id")
     List<Object[]> findTextTurnRecoveryCandidates(
             @Param("estado") com.pretriage.backend.model.chat.EstadoTurnoTexto estado,
-            @Param("antesDe") java.time.LocalDateTime antesDe);
+            @Param("antesDe") java.time.LocalDateTime antesDe, @Param("ahora") java.time.LocalDateTime ahora);
+
+    @Query("select c.id, c.paciente.usuarioAuth.id from Chat c where c.finalizado = false " +
+            "and c.estadoTurnoTexto = com.pretriage.backend.model.chat.EstadoTurnoTexto.NO_DISPONIBLE " +
+            "and (c.estadoRecuperacion is null or c.estadoRecuperacion = com.pretriage.backend.model.chat.EstadoRecuperacionChat.SIN_RECUPERACION) " +
+            "and (c.recuperacionLegacyAplicada is null or c.recuperacionLegacyAplicada = false) " +
+            "and c.solicitudTurnoTextoId is not null " +
+            "and not exists (select newer.id from Chat newer where newer.paciente = c.paciente " +
+            "and (newer.fechaHoraCreacion > c.fechaHoraCreacion or " +
+            "(newer.fechaHoraCreacion = c.fechaHoraCreacion and newer.id > c.id))) " +
+            "and exists (select consulta.id from ConsultaMedica consulta where consulta.paciente = c.paciente " +
+            "and consulta.estadoConsulta not in (com.pretriage.backend.model.consultas.EstadoConsulta.CANCELADA, " +
+            "com.pretriage.backend.model.consultas.EstadoConsulta.FINALIZADA, com.pretriage.backend.model.consultas.EstadoConsulta.PENDIENTE) " +
+            "and (c.consultaOrigenId is null or consulta.id = c.consultaOrigenId) " +
+            "and consulta.fechaHoraCreacion <= c.fechaHoraCreacion) order by c.id")
+    List<Object[]> findLegacyTextRecoveryCandidates();
 }
