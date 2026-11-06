@@ -1,236 +1,244 @@
 package com.pretriage.backend.services;
 
 import com.pretriage.backend.controllers.dtos.ChatDTO;
-import com.pretriage.backend.exceptions.ChatFinalizadoException;
-import com.pretriage.backend.exceptions.ChatNoEncontradoException;
-import com.pretriage.backend.exceptions.ConflictoDeEstadoException;
-import com.pretriage.backend.exceptions.ProveedorIaException;
+import com.pretriage.backend.exceptions.*;
 import com.pretriage.backend.mappers.MapperChat;
-import com.pretriage.backend.model.chat.AutorMensaje;
-import com.pretriage.backend.model.chat.Chat;
-import com.pretriage.backend.model.chat.EstadoClasificacionChat;
-import com.pretriage.backend.model.chat.EstadoTurnoTexto;
-import com.pretriage.backend.model.chat.Mensaje;
+import com.pretriage.backend.model.chat.*;
 import com.pretriage.backend.repositories.RepoChat;
+import jakarta.annotation.PreDestroy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.scheduling.annotation.Scheduled;
 
-import java.util.List;
-import java.util.UUID;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.time.Duration;
 import java.time.LocalDateTime;
-import jakarta.annotation.PreDestroy;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Durable, bounded worker for text interview turns. */
+/** Durable jobs for accepted text turns and closed text/voice classifications. */
 @Service
 public class TextoTurnoService {
     private static final Logger log = LoggerFactory.getLogger(TextoTurnoService.class);
-    private static final int MAX_INTENTOS = 2;
+    private static final int MAX_FALLOS_INTERNOS = 2;
     private final RepoChat repoChat;
     private final ChatService chatService;
     private final ThreadPoolTaskExecutor executor;
     private final TransactionTemplate tx;
-    private final TransactionTemplate txNuevo;
+    private final Set<String> encolados = ConcurrentHashMap.newKeySet();
+    @Value("${chat.recuperacion.legacy-activos:true}") private boolean recuperarLegacy = true;
+    @Value("${chat.recuperacion.texto-demora-ms:2000}") private long demoraTextoMs = 2000;
+    @Value("${chat.recuperacion.clasificacion-demora-ms:5000}") private long demoraClasificacionMs = 5000;
+    @Value("${chat.recuperacion.api-demora-inicial-ms:30000}") private long demoraApiMs = 30000;
 
-    public TextoTurnoService(RepoChat repoChat, ChatService chatService,
-                             PlatformTransactionManager transactionManager) {
+    public TextoTurnoService(RepoChat repoChat, ChatService chatService, PlatformTransactionManager manager) {
         this.repoChat = repoChat;
         this.chatService = chatService;
-        this.tx = new TransactionTemplate(transactionManager);
-        this.txNuevo = new TransactionTemplate(transactionManager);
-        this.txNuevo.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
-        this.executor = new ThreadPoolTaskExecutor();
-        this.executor.setCorePoolSize(2);
-        this.executor.setMaxPoolSize(2);
-        this.executor.setQueueCapacity(64);
-        this.executor.setThreadNamePrefix("text-turn-");
-        this.executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
-        this.executor.initialize();
+        tx = new TransactionTemplate(manager);
+        tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(64);
+        executor.setThreadNamePrefix("chat-recovery-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        executor.initialize();
     }
 
-    /** Atomically stores the patient turn and its idempotency key before returning 202. */
+    /** The patient message and key are committed before returning 202 or starting any AI call. */
     public ChatDTO aceptarTurno(String idChat, String idPaciente, String contenido, String solicitudId) {
         String requestId = solicitudId == null || solicitudId.isBlank()
                 ? UUID.randomUUID().toString() : UUID.fromString(solicitudId).toString();
         String texto = contenido.trim();
-        Long chatId = Long.valueOf(idChat);
-        RepoChat.TextTurnSnapshot snapshot = repoChat.findTextTurnSnapshot(chatId, idPaciente)
-                .orElseThrow(ChatNoEncontradoException::new);
+        long chatId = Long.parseLong(idChat);
+        var snapshot = repoChat.findTextTurnSnapshot(chatId, idPaciente).orElseThrow(ChatNoEncontradoException::new);
         var replay = repoChat.findTextTurnContent(chatId, requestId);
         if (replay.isPresent()) {
             if (!texto.equals(replay.get())) throw conflicto("El identificador ya se usó con otro mensaje.");
             return chatService.obtenerChat(idChat, idPaciente);
         }
-        EstadoTurnoTexto estado = snapshot.getEstadoTurnoTexto() == null
-                ? EstadoTurnoTexto.SIN_SOLICITAR : snapshot.getEstadoTurnoTexto();
-        if (estado == EstadoTurnoTexto.PENDIENTE) {
-            throw conflicto("Ya hay un mensaje en proceso.");
-        }
-        if (estado == EstadoTurnoTexto.NO_DISPONIBLE) {
-            throw conflicto("El asistente no está disponible para continuar esta entrevista.");
-        }
+        // Do not wait behind the AI transaction just to reject a second submission.
+        // The locked checks below still fence a concurrent first submission.
+        if (snapshot.getFinalizado()) throw new ChatFinalizadoException();
+        if (snapshot.getEstadoTurnoTexto() == EstadoTurnoTexto.PENDIENTE
+                || snapshot.getEstadoTurnoTexto() == EstadoTurnoTexto.NO_DISPONIBLE) throw conflicto("Ya hay un mensaje en proceso.");
         AtomicBoolean nuevo = new AtomicBoolean(false);
         ChatDTO result = tx.execute(status -> {
-            Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente)
-                    .orElseThrow(ChatNoEncontradoException::new);
-            Mensaje previo = encontrarSolicitud(chat, requestId);
+            Chat chat = propio(idChat, idPaciente);
+            Mensaje previo = chat.getMensajes().stream().filter(m -> requestId.equals(m.getSolicitudId())).findFirst().orElse(null);
             if (previo != null) {
                 if (!texto.equals(previo.getContenido())) throw conflicto("El identificador ya se usó con otro mensaje.");
                 return MapperChat.toDTO(chat);
             }
-            if (chat.getEstadoTurnoTexto() == EstadoTurnoTexto.PENDIENTE) {
-                throw conflicto("Ya hay un mensaje en proceso.");
-            }
-            if (chat.getEstadoTurnoTexto() == EstadoTurnoTexto.NO_DISPONIBLE) {
-                throw conflicto("El asistente no está disponible para continuar esta entrevista.");
-            }
             if (chat.isFinalizado()) throw new ChatFinalizadoException();
+            if (chat.getEstadoTurnoTexto() == EstadoTurnoTexto.PENDIENTE
+                    || chat.getEstadoTurnoTexto() == EstadoTurnoTexto.NO_DISPONIBLE) throw conflicto("Ya hay un mensaje en proceso.");
             Mensaje mensaje = new Mensaje(texto, AutorMensaje.PACIENTE, chat.getPaciente());
             mensaje.setSolicitudId(requestId);
             chat.agregarMensaje(mensaje);
             chat.setSolicitudTurnoTextoId(requestId);
             chat.setIntentosTurnoTexto(0);
+            chat.setFallosInternosTurnoTexto(0);
+            chat.setFallosDisponibilidad(0);
             chat.setTurnoTextoEnCurso(false);
             chat.setErrorTurnoTexto(null);
             chat.setEstadoTurnoTexto(EstadoTurnoTexto.PENDIENTE);
+            chat.setEstadoRecuperacion(EstadoRecuperacionChat.REINTENTANDO);
+            chat.setProximoReintentoEn(LocalDateTime.now());
+            chat.avanzarVersionEstado();
             repoChat.save(chat);
             nuevo.set(true);
             return MapperChat.toDTO(chat);
         });
-        if (nuevo.get() && result.estadoTurnoTexto() == EstadoTurnoTexto.PENDIENTE) {
-            try { executor.execute(() -> procesar(idChat, idPaciente, requestId)); }
-            catch (RuntimeException ignored) { /* ApplicationReady recovery will pick up committed work. */ }
-        }
+        if (nuevo.get()) encolar(idChat, () -> procesarTexto(idChat, idPaciente, requestId));
         return result;
     }
 
-    /** Recover only turns explicitly owned by this service; never replay the patient submission. */
     @EventListener(ApplicationReadyEvent.class)
-    public void recuperarPendientesAlIniciar() {
-        encolarPendientes();
-    }
+    public void recuperarPendientesAlIniciar() { recuperarPendientesPeriodicamente(); }
 
-    @Scheduled(fixedDelay = 30000)
+    @Scheduled(fixedDelayString = "${chat.recuperacion.scan-ms:1000}")
     public void recuperarPendientesPeriodicamente() {
-        encolarPendientes();
-    }
-
-    private void encolarPendientes() {
-        for (Object[] fila : repoChat.findTextTurnRecoveryCandidates(EstadoTurnoTexto.PENDIENTE,
-                LocalDateTime.now().minusSeconds(150))) {
-            String idChat = String.valueOf(fila[0]);
-            String idPaciente = String.valueOf(fila[1]);
-            String requestId = String.valueOf(fila[2]);
-            try { executor.execute(() -> procesar(idChat, idPaciente, requestId)); }
-            catch (RuntimeException ignored) { /* Durable PENDIENTE is reconsidered on the next scheduled scan. */ }
+        if (recuperarLegacy) {
+            for (Object[] fila : repoChat.findLegacyTextRecoveryCandidates()) {
+                try { chatService.recuperarTurnoLegacy(String.valueOf(fila[0]), String.valueOf(fila[1])); }
+                catch (ChatFinalizadoException ignored) { /* Old consultation: no replay. */ }
+                catch (RuntimeException error) { log.warn("Legacy chat recovery deferred chatId={} errorType={}", fila[0], error.getClass().getSimpleName()); }
+            }
+        }
+        for (Object[] fila : repoChat.findTextTurnRecoveryCandidates(EstadoTurnoTexto.PENDIENTE, LocalDateTime.now().minusSeconds(150), LocalDateTime.now())) {
+            String id = String.valueOf(fila[0]), paciente = String.valueOf(fila[1]), solicitud = String.valueOf(fila[2]);
+            encolar(id, () -> procesarTexto(id, paciente, solicitud));
+        }
+        for (Object[] fila : repoChat.findAutomaticClassificationRecoveryCandidates(EstadoClasificacionChat.PENDIENTE, LocalDateTime.now(), LocalDateTime.now().minusSeconds(150))) {
+            String id = String.valueOf(fila[0]), paciente = String.valueOf(fila[1]);
+            encolar(id, () -> procesarClasificacion(id, paciente));
         }
     }
 
-    @PreDestroy
-    public void apagarExecutor() { executor.shutdown(); }
-
-    private void procesar(String idChat, String idPaciente, String requestId) {
+    private void encolar(String id, Runnable trabajo) {
+        if (!encolados.add(id)) return;
         try {
-            procesarConReintentos(idChat, idPaciente, requestId);
-        } catch (RuntimeException error) {
-            try { marcarNoDisponible(idChat, idPaciente, requestId, null, "error_operativo"); }
-            catch (RuntimeException ignored) { /* The periodic recovery scan can retry if persistence is unavailable. */ }
-        }
-    }
-
-    private void procesarConReintentos(String idChat, String idPaciente, String requestId) {
-        while (true) {
-            Integer intento = txNuevo.execute(status -> {
-                Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente)
-                        .orElseThrow(ChatNoEncontradoException::new);
-                if (chat.getEstadoTurnoTexto() != EstadoTurnoTexto.PENDIENTE
-                        || !requestId.equals(chat.getSolicitudTurnoTextoId())) return 0;
-                if (chat.isTurnoTextoEnCurso() && chat.getTurnoTextoIniciadoEn() != null
-                        && chat.getTurnoTextoIniciadoEn().isAfter(LocalDateTime.now().minusSeconds(150))) return 0;
-                if (chat.getIntentosTurnoTexto() >= MAX_INTENTOS) return -1;
-                chat.setIntentosTurnoTexto(chat.getIntentosTurnoTexto() + 1);
-                chat.setTurnoTextoEnCurso(true);
-                chat.setTurnoTextoIniciadoEn(LocalDateTime.now());
-                repoChat.save(chat);
-                return chat.getIntentosTurnoTexto();
+            executor.execute(() -> {
+                try { trabajo.run(); }
+                catch (RuntimeException error) {
+                    // Storage failures leave a committed lease for recovery, never a false provider outage.
+                    log.warn("Chat recovery deferred chatId={} errorType={}", id, error.getClass().getSimpleName());
+                } finally { encolados.remove(id); }
             });
-            if (intento == null || intento == 0) return;
-            if (intento < 0) { marcarNoDisponible(idChat, idPaciente, requestId, MAX_INTENTOS, "proveedor_no_disponible"); return; }
-            long startedAt = System.nanoTime();
-            try {
-                chatService.procesarTurnoTextoPersistido(idChat, idPaciente, requestId, intento);
-                log.info("Text turn completed chatId={} requestId={} attempt={} elapsedMs={}", idChat,
-                        requestId, intento, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
-                return;
-            } catch (RuntimeException error) {
-                boolean transientProvider = error instanceof ProveedorIaException proveedor && proveedor.esTransitorio();
-                if (transientProvider && intento < MAX_INTENTOS) {
-                    txNuevo.executeWithoutResult(status -> {
-                        Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente).orElseThrow(ChatNoEncontradoException::new);
-                        if (chat.getEstadoTurnoTexto() == EstadoTurnoTexto.PENDIENTE
-                                && requestId.equals(chat.getSolicitudTurnoTextoId())
-                                && chat.getIntentosTurnoTexto() == intento) {
-                            chat.setTurnoTextoEnCurso(false);
-                            chat.setTurnoTextoIniciadoEn(null);
-                            repoChat.save(chat);
-                        }
-                    });
-                    log.warn("Text turn attempt failed chatId={} requestId={} attempt={} category={} elapsedMs={}",
-                            idChat, requestId, intento, "transient_provider",
-                            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
-                    continue;
-                }
-                String category = transientProvider ? "proveedor_no_disponible" : "respuesta_no_valida";
-                marcarNoDisponible(idChat, idPaciente, requestId, intento, category);
-                log.warn("Text turn stopped chatId={} requestId={} attempt={} category={} elapsedMs={}",
-                        idChat, requestId, intento, category,
-                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
-                return;
+        } catch (RuntimeException error) { encolados.remove(id); }
+    }
+
+    private void procesarTexto(String id, String paciente, String solicitud) {
+        Integer intento = tx.execute(status -> {
+            Chat chat = propio(id, paciente);
+            if (chat.isFinalizado() || !solicitud.equals(chat.getSolicitudTurnoTextoId())
+                    || (chat.getEstadoTurnoTexto() != EstadoTurnoTexto.PENDIENTE
+                    && chat.getEstadoTurnoTexto() != EstadoTurnoTexto.NO_DISPONIBLE) || !vencido(chat)) return 0;
+            if (chat.isTurnoTextoEnCurso()) {
+                if (leaseVigente(chat.getTurnoTextoIniciadoEn())) return 0;
+                chat.setFallosInternosTurnoTexto(chat.getFallosInternosTurnoTexto() + 1);
             }
+            if (chat.getFallosInternosTurnoTexto() >= MAX_FALLOS_INTERNOS) { chatService.cerrarParcialTexto(chat); return 0; }
+            chat.setEstadoTurnoTexto(EstadoTurnoTexto.PENDIENTE);
+            chat.setIntentosTurnoTexto(chat.getIntentosTurnoTexto() + 1);
+            chat.setTurnoTextoEnCurso(true);
+            chat.setTurnoTextoIniciadoEn(LocalDateTime.now());
+            chat.setEstadoRecuperacion(EstadoRecuperacionChat.REINTENTANDO);
+            chat.setProximoReintentoEn(null);
+            chat.avanzarVersionEstado();
+            return chat.getIntentosTurnoTexto();
+        });
+        if (intento == null || intento == 0) return;
+        try { chatService.procesarTurnoTextoPersistido(id, paciente, solicitud, intento); }
+        catch (RuntimeException error) {
+            tx.executeWithoutResult(status -> {
+                Chat chat = propio(id, paciente);
+                if (!solicitud.equals(chat.getSolicitudTurnoTextoId()) || chat.getIntentosTurnoTexto() != intento
+                        || !chat.isTurnoTextoEnCurso() || chat.isFinalizado()) return;
+                chat.setTurnoTextoEnCurso(false);
+                chat.setTurnoTextoIniciadoEn(null);
+                if (error instanceof ChatFinalizadoException) { abandonar(chat); return; }
+                if (apiNoDisponible(error)) {
+                    chat.setEstadoTurnoTexto(EstadoTurnoTexto.NO_DISPONIBLE);
+                    chat.setErrorTurnoTexto("api_no_disponible");
+                    programar(chat, error, demoraTextoMs);
+                } else {
+                    chat.setFallosInternosTurnoTexto(chat.getFallosInternosTurnoTexto() + 1);
+                    chat.setErrorTurnoTexto("procesamiento_interno");
+                    if (configuracion(error) || chat.getFallosInternosTurnoTexto() >= MAX_FALLOS_INTERNOS) chatService.cerrarParcialTexto(chat);
+                    else programar(chat, error, demoraTextoMs);
+                }
+                chat.avanzarVersionEstado();
+            });
+            log.warn("Text turn recovered chatId={} attempt={} category={}", id, intento, categoria(error));
         }
     }
 
-    private void marcarNoDisponible(String idChat, String idPaciente, String requestId, Integer intento,
-                                    String categoria) {
-        txNuevo.executeWithoutResult(status -> {
-            Chat chat = repoChat.findForUpdate(Long.valueOf(idChat), idPaciente).orElseThrow(ChatNoEncontradoException::new);
-            if (chat.getEstadoTurnoTexto() != EstadoTurnoTexto.PENDIENTE
-                    || !requestId.equals(chat.getSolicitudTurnoTextoId())
-                    || (intento != null && chat.getIntentosTurnoTexto() != intento)
-                    || (intento == null && chat.isTurnoTextoEnCurso())) return;
-            chat.setEstadoTurnoTexto(EstadoTurnoTexto.NO_DISPONIBLE);
-            chat.setTurnoTextoEnCurso(false);
-            chat.setTurnoTextoIniciadoEn(null);
-            chat.setErrorTurnoTexto(categoria);
-            // Preserve the terminal failed-classification state without creating a triage result.
-            if (chat.getEstadoClasificacion() == EstadoClasificacionChat.FALLIDA
-                    || chat.getEstadoClasificacion() == EstadoClasificacionChat.PENDIENTE) {
-                chat.setFinalizado(true);
-                chat.setEstadoClasificacion(EstadoClasificacionChat.FALLIDA);
-                chat.setResultadoTriageJson(null);
+    private void procesarClasificacion(String id, String paciente) {
+        Integer intento = tx.execute(status -> {
+            Chat chat = propio(id, paciente);
+            if (!chat.isFinalizado() || chat.getEstadoClasificacion() != EstadoClasificacionChat.PENDIENTE
+                    || !chat.isRecuperacionAutomaticaClasificacion() || !vencido(chat)) return 0;
+            if (chat.isClasificacionAutomaticaEnCurso()) {
+                if (leaseVigente(chat.getClasificacionIniciadaEn())) return 0;
+                chat.setFallosInternosClasificacion(chat.getFallosInternosClasificacion() + 1);
             }
-            chat.setRecuperacionAutomaticaClasificacion(false);
-            chat.setClasificacionAutomaticaEnCurso(false);
-            repoChat.save(chat);
+            if (chat.getFallosInternosClasificacion() >= MAX_FALLOS_INTERNOS) { chatService.marcarParcial(chat); return 0; }
+            chat.setIntentosClasificacionAutomaticos(chat.getIntentosClasificacionAutomaticos() + 1);
+            chat.setClasificacionAutomaticaEnCurso(true);
+            chat.setClasificacionIniciadaEn(LocalDateTime.now());
+            chat.setEstadoRecuperacion(EstadoRecuperacionChat.REINTENTANDO);
+            chat.setProximoReintentoEn(null);
+            chat.avanzarVersionEstado();
+            return chat.getIntentosClasificacionAutomaticos();
         });
+        if (intento == null || intento == 0) return;
+        try { chatService.procesarClasificacionDurable(id, paciente, intento); }
+        catch (RuntimeException error) {
+            tx.executeWithoutResult(status -> {
+                Chat chat = propio(id, paciente);
+                if (chat.getEstadoClasificacion() != EstadoClasificacionChat.PENDIENTE
+                        || !chat.isClasificacionAutomaticaEnCurso() || chat.getIntentosClasificacionAutomaticos() != intento) return;
+                if (error instanceof ChatFinalizadoException) { abandonar(chat); return; }
+                chatService.registrarFalloClasificacion(chat, error, demoraClasificacionMs, demoraApiMs);
+            });
+            log.warn("Classification recovered chatId={} attempt={} category={}", id, intento, categoria(error));
+        }
     }
 
-    private static ConflictoDeEstadoException conflicto(String mensaje) {
-        return new ConflictoDeEstadoException(mensaje);
+    private void programar(Chat chat, RuntimeException error, long demoraInternaMs) {
+        RecuperacionChatPolicy.programar(chat, error, demoraInternaMs, demoraApiMs);
     }
 
-    private static Mensaje encontrarSolicitud(Chat chat, String requestId) {
-        return chat.getMensajes().stream().filter(m -> requestId.equals(m.getSolicitudId())).findFirst().orElse(null);
+    private static void abandonar(Chat chat) {
+        chat.setFinalizado(true);
+        chat.setEstadoTurnoTexto(EstadoTurnoTexto.COMPLETADA);
+        chat.setTurnoTextoEnCurso(false);
+        if (chat.getResultadoTriageJson() == null && chat.getMensajes().stream().anyMatch(m -> m.getAutor() == AutorMensaje.PACIENTE)) {
+            chat.setCierreParcial(true);
+            chat.setEstadoClasificacion(EstadoClasificacionChat.PARCIAL);
+        }
+        ChatService.limpiarRecuperacion(chat);
+        chat.avanzarVersionEstado();
     }
 
+    private Chat propio(String id, String paciente) { return repoChat.findForUpdate(Long.valueOf(id), paciente).orElseThrow(ChatNoEncontradoException::new); }
+    private static boolean vencido(Chat chat) { return chat.getProximoReintentoEn() == null || !chat.getProximoReintentoEn().isAfter(LocalDateTime.now()); }
+    private static boolean leaseVigente(LocalDateTime inicio) { return inicio != null && inicio.isAfter(LocalDateTime.now().minusSeconds(150)); }
+    private static boolean apiNoDisponible(RuntimeException error) { return error instanceof ProveedorIaException p && p.isApiNoDisponible(); }
+    private static boolean configuracion(RuntimeException error) { return error instanceof ProveedorIaException p && p.getCategoria() == ProveedorIaException.Categoria.CONFIGURACION; }
+    private static String categoria(RuntimeException error) { return error instanceof ProveedorIaException p ? p.getCategoria().name() : "OPERACION_INTERNA"; }
+    private static ConflictoDeEstadoException conflicto(String mensaje) { return new ConflictoDeEstadoException(mensaje); }
+    @PreDestroy public void apagarExecutor() { executor.shutdown(); }
 }

@@ -108,6 +108,12 @@ public class MetricasHospitalService {
         if (incluirSinRevision) {
             long sinRevision = conteos.getOrDefault(null, 0L);
             items.add(new DistribucionNivelItem(SIN_REVISION, sinRevision, porcentaje(sinRevision, total)));
+        } else {
+            long clasificados = java.util.Arrays.stream(NivelDeGravedad.values())
+                    .mapToLong(nivel -> conteos.getOrDefault(nivel, 0L)).sum();
+            long sinClasificacionIa = Math.max(0L, total - clasificados);
+            items.add(new DistribucionNivelItem(
+                    "SIN_CLASIFICACION_IA", sinClasificacionIa, porcentaje(sinClasificacionIa, total)));
         }
         return items;
     }

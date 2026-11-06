@@ -13,6 +13,10 @@ import com.pretriage.backend.model.hospitales.Sala;
 import com.pretriage.backend.model.hospitales.Sector;
 import com.pretriage.backend.model.personas.Medico;
 import com.pretriage.backend.model.personas.Paciente;
+import com.pretriage.backend.model.chat.AutorMensaje;
+import com.pretriage.backend.model.chat.Chat;
+import com.pretriage.backend.model.chat.EstadoClasificacionChat;
+import com.pretriage.backend.model.chat.Mensaje;
 import com.pretriage.backend.repositories.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -74,6 +78,49 @@ class AtencionMedicoServiceTest {
         GestionDeArchivosService gestionDeArchivosService;
         @Mock
         EstudioClinicoService estudioClinicoService;
+
+        @Test
+        void pretriajeParcialDevuelveEstadoYCadenaLiteralParaElMedicoDeLaAtencion() {
+                Medico medico = new Medico();
+                medico.setId(10L);
+                Sala sala = new Sala();
+                sala.setId(30L);
+                SesionAtencionMedica sesion = new SesionAtencionMedica();
+                sesion.setId(20L);
+                sesion.setMedico(medico);
+                sesion.setSala(sala);
+                sesion.setEstado(EstadoSesionMedica.ACTIVA);
+
+                Chat chat = new Chat();
+                chat.setEstadoClasificacion(EstadoClasificacionChat.PARCIAL);
+                chat.setCierreParcial(true);
+                chat.setMensajes(List.of(
+                        new Mensaje("Me duele la cabeza", AutorMensaje.PACIENTE, null),
+                        new Mensaje("¿Desde cuándo?", AutorMensaje.BOT, null)));
+                ConsultaMedica consulta = new ConsultaMedica();
+                consulta.setId(50L);
+                consulta.setMedico(medico);
+                consulta.setSala(sala);
+                consulta.setNivelDeGravedadBot(NivelDeGravedad.NORMAL);
+                consulta.setChat(chat);
+                EntradaCola entrada = new EntradaCola();
+                entrada.setEstado(EstadoEntradaCola.EN_ATENCION);
+                entrada.setConsultaMedica(consulta);
+
+                when(repoSesionesAtencionMedica.findByIdAndMedicoUsuarioAuthIdForUpdate(20L, "auth0"))
+                                .thenReturn(Optional.of(sesion));
+                when(repoEntradasCola.findByConsultaMedicaId(50L)).thenReturn(Optional.of(entrada));
+
+                PretriajeConsultaDTO resultado = service.obtenerPretriaje("auth0", 20L, 50L);
+
+                assertEquals(EstadoClasificacionChat.PARCIAL, resultado.estadoClasificacion());
+                assertEquals(true, resultado.cierreParcial());
+                assertNull(resultado.resumenClinico());
+                assertEquals(List.of("Me duele la cabeza", "¿Desde cuándo?"), resultado.mensajesConversacion()
+                                .stream().map(com.pretriage.backend.controllers.dtos.MensajeDTO::contenido).toList());
+                assertEquals(List.of("PACIENTE", "BOT"), resultado.mensajesConversacion()
+                                .stream().map(com.pretriage.backend.controllers.dtos.MensajeDTO::autor).toList());
+        }
 
         @Test
         void noPermitePausarUnaSesionConConsultaTomada() {

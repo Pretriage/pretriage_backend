@@ -1,5 +1,7 @@
 # Alcance y validación semántica del chatbot
 
+> Política vigente desde el 5/11/2026: [recuperación automática y cierre parcial](34-automatic-chat-recovery.md). Las referencias siguientes a bloqueos técnicos terminales, `FALLIDA` y reintentos manuales describen comportamientos anteriores.
+
 ## Objetivo y plan aplicado
 
 El chat reúne información para una consulta de salud. Un pedido ajeno a esa tarea
@@ -69,6 +71,40 @@ ofrecer categorías o exigir cuantificación prematura. Esto conserva la correcc
 única y los 45 segundos; no genera una pregunta clínica local ni quita controles.
 
 ## Contratos y persistencia
+
+### Dolor expresado con vocabulario cotidiano
+
+El seguimiento local reconoce «me duele la panza» y «me duele la barriga» como
+dolor localizado expresado por el paciente, también cuando retoma la consulta
+después de una redirección por contenido fuera de contexto. Conserva la ubicación
+literal en la etiqueta y el historial para cuantificar inicio e intensidad; no
+agrega un diagnóstico ni una respuesta clínica local. Para el seguimiento,
+«panza», «barriga» y «abdomen» comparten `dolor:abdomen`: cambiar esas palabras en
+una pregunta o respuesta no crea un segundo dolor ni pierde los datos ya aportados.
+La referencia posterior «el dolor» conserva el dato espontáneo cuando existe un
+único dolor localizado al que pueda referirse; con varios dolores no asigna ese
+dato a ninguno por suposición. Las referencias temporales de otro síntoma siguen
+vinculadas a ese síntoma, sin propagarse solo por compartir una oración.
+Una negación, un mensaje excluido o una mención solo del bot no constituyen
+evidencia positiva.
+
+El caso observado el 5/11/2026 terminaba con objetivo `ACLARACION` sin síntoma
+reconocido: una corrección de Gemini se rechazaba como
+`ACLARACION_FUERA_DE_OBJETIVO` y el turno quedaba `NO_DISPONIBLE`. El ajuste es de
+reconocimiento del dato afirmado; conserva el verificador semántico, la corrección
+única y los presupuestos de procesamiento. La nueva recuperación del backend
+retoma una sola vez los chats abiertos bloqueados que conservan una consulta
+activa. Mantiene el mensaje y la solicitud originales; no reabre conversaciones
+cerradas ni consultas canceladas o terminadas. Actualizar únicamente el APK no
+instala esta recuperación en un backend anterior; ver la política del documento 34.
+
+Verificado localmente el 5/11/2026: la regresión falló antes del cambio y luego
+pasaron las 148 pruebas enfocadas de `ProgresoEntrevistaTest` y `ChatServiceTest`.
+La suite mediante `python scripts/test_backend_isolated.py` completó 771 pruebas,
+sin fallos ni errores, con 18 pruebas opcionales omitidas, usando una base
+descartable y Docker Compose deshabilitado. La regresión del servicio incluye
+el rechazo semántico `COMUNICACION` seguido de una corrección válida. Esta
+verificación no implica que el backend remoto ya incorpore el cambio.
 
 La continuación de texto devuelve internamente `mensaje` y `estadoEntrada`.
 En `AMBIGUO`, una aclaración de Gemini se verifica antes de mostrarla y se dirige al
@@ -261,3 +297,12 @@ variantes de prompt injection ni un examen clínico de la prioridad asignada.
   `-Dtest=ChatHardeningGeminiSmokeTest#nombreDelMetodo` en lugar de repetir toda la matriz.
 - Las pruebas de voz ejercitan sesión, transcripciones y cierre con transporte
   simulado. No constituyen una evaluación de audio en un dispositivo físico.
+
+## Respuestas contextuales de intensidad
+
+Una respuesta como «muy intenso» resuelve la intensidad del dolor cuando contesta
+la pregunta pendiente sobre ese dato, aunque no repita «dolor». La asociación
+requiere un dolor inequívoco; no se aplica a fiebre, a negaciones ni a mensajes
+no solicitados con varios dolores posibles. Se conserva la expresión cualitativa
+sin inventar una puntuación numérica. Esta corrección evita el objetivo de
+aclaración inconsistente observado en el chat 1720 y conserva los validadores.

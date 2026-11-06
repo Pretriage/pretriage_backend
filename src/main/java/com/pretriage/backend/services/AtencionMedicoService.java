@@ -7,6 +7,7 @@ import com.pretriage.backend.controllers.dtos.AsignacionMedicoDTO;
 import com.pretriage.backend.controllers.dtos.ConsultaLlamadaDTO;
 import com.pretriage.backend.controllers.dtos.EstudioClinicoDTO;
 import com.pretriage.backend.controllers.dtos.PretriajeConsultaDTO;
+import com.pretriage.backend.controllers.dtos.MensajeDTO;
 import com.pretriage.backend.controllers.dtos.RevisionPrioridadDTO;
 import com.pretriage.backend.controllers.dtos.RevisionPrioridadRequest;
 import com.pretriage.backend.controllers.dtos.SalaDTO;
@@ -552,6 +553,13 @@ public class AtencionMedicoService {
                 : (ultima.getDecision() == DecisionRevisionPrioridad.CONFIRMAR
                         ? EstadoRevisionPrioridad.CONFIRMADA
                         : EstadoRevisionPrioridad.CORREGIDA);
+        TriageResultDTO resumen = leerResumenPretriaje(consulta);
+        List<MensajeDTO> mensajesConversacion = resumen != null || consulta.getChat() == null
+                ? List.of()
+                : consulta.getChat().getMensajes().stream()
+                        .map(mensaje -> new MensajeDTO(
+                                mensaje.getContenido(), mensaje.getAutor().name(), mensaje.getFechaHoraEnvio()))
+                        .toList();
         return new PretriajeConsultaDTO(
                 consulta.getId(),
                 consulta.getNivelDeGravedadBot(),
@@ -559,11 +567,14 @@ public class AtencionMedicoService {
                         ? consulta.getNivelDeGravedadBot()
                         : consulta.getNivelDeGravedadMedico(),
                 estado,
-                leerResumenPretriaje(consulta),
+                resumen,
                 ultima == null ? null
                         : new RevisionPrioridadDTO(
                                 ultima.getId(), ultima.getDecision(), ultima.getPrioridadAnterior(),
-                                ultima.getPrioridadNueva(), ultima.getMotivo(), ultima.getFechaHora()));
+                                ultima.getPrioridadNueva(), ultima.getMotivo(), ultima.getFechaHora()),
+                consulta.getChat() == null ? null : consulta.getChat().getEstadoClasificacion(),
+                consulta.getChat() != null && consulta.getChat().isCierreParcial(),
+                mensajesConversacion);
     }
 
     private TriageResultDTO leerResumenPretriaje(ConsultaMedica consulta) {

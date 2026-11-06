@@ -138,16 +138,22 @@ not prove that Gemini REST supplied the classification. These fields are additiv
 
 `finalizado` means that the interview has ended, not that Gemini necessarily produced
 a result. `Chat.estadoClasificacion` distinguishes `NO_SOLICITADA`, `PENDIENTE`,
-`COMPLETADA` and `FALLIDA`. Legacy null states infer `COMPLETADA` only if a result
-already exists; otherwise they read as `NO_SOLICITADA`. The new JPA column is nullable
-for existing rows and is added by `ddl-auto=update` without rewriting messages.
+`COMPLETADA`, legacy `FALLIDA` and `PARCIAL`. A partial closure preserves the
+conversation, has no `resultadoTriageJson`, and provides no AI priority; the
+consultation remains in its existing queue with its provisional initial priority.
+Legacy null states infer `COMPLETADA` only if a result already exists; otherwise they
+read as `NO_SOLICITADA`.
 
-Once final classification is requested, a provider failure preserves the answers and
-closes the interview with `FALLIDA`; it never assigns a local priority or updates the
-queue with an invalid result. Text failures before interview closure still roll back
-undelivered answers and permit continued interviewing. Voice hang-up before accepted
-closure likewise preserves an unfinished interview. Transport failure after accepted
-closure preserves a closed failed interview, without classifying an incomplete snapshot.
+Technical generation or validation failures use durable automatic recovery. Internal
+failures receive up to two workflow executions per phase; real transient API failures
+continue with persisted backoff until recovered or the consultation is invalidated.
+If the system cannot produce another valid question, it closes with saved answers and
+attempts classification from the available facts. A valid result becomes
+`COMPLETADA`; exhausted or permanent classification failure becomes `PARCIAL`, with
+`resultadoTriageJson=null`. It never assigns a local priority or changes the existing
+queue priority. Legacy `FALLIDA` remains readable for historical data and the manual
+compatibility endpoint. See [automatic chat recovery](34-automatic-chat-recovery.md)
+for current budgets, persisted states, and invalidation rules.
 
 Text and voice use `ChatService.errorClasificacionFinal`: valid final structure,
 priority 1-5, affirmative literal patient alarms or affirmative final-result alarms
@@ -160,23 +166,21 @@ continuations labelled relevant also undergo a separate scope check before they 
 shown; an invalid candidate uses the existing single correction within the remaining
 45-second operation budget.
 
-A structurally parsed but incoherent final response requests at most one Gemini
-correction with a final-output schema and the remaining 45-second budget. The same
-validator checks that correction. No backend-generated clinical summary/priority is
-substituted. Each REST request gets at most two HTTP attempts; a separate correction
-request shares the original operation's 45-second total budget. Safety, authentication,
-invalid JSON and semantic failures do not trigger HTTP retries. If correction is invalid
-or time expires, state remains `FALLIDA` and result stays absent. Successful
-classification stores the result and sets `COMPLETADA`, updating the queue once.
-Provider exceptions after closure commit the closed failed interview via
-`@Transactional(noRollbackFor=ProveedorIaException.class)`.
+A structurally parsed but incoherent final response may request one Gemini correction
+within the current operation budget. The same validator checks that correction. No
+backend-generated clinical summary/priority is substituted. Internal invalid output
+uses the workflow recovery budget; real transient REST failures use durable backoff.
+If classification still cannot complete, the state is `PARCIAL` and the result stays
+absent. Successful classification stores the result and sets `COMPLETADA`, updating
+the existing queue entry once.
 
-`POST /api/chat/{id}/clasificacion` retries processing a closed `FALLIDA` interview
-without adding a patient message or asking more questions. It requires ownership and
-the latest chat; a pessimistic row lock serializes retries. Completed or historical
-chats cannot be reclassified by this operation. Mobile reads `estadoClasificacion`,
-blocks text/voice after interview closure and offers a neutral `Reintentar` action.
-The reception form fallback remains unchanged.
+`POST /api/chat/{id}/clasificacion` remains a compatibility endpoint for a closed
+legacy `FALLIDA` interview without adding a patient message. It requires ownership and
+the latest chat; a pessimistic row lock serializes requests. New automatic jobs use
+`PENDIENTE` while processing and do not require a patient retry action. Mobile reads
+`estadoClasificacion`, blocks text/voice after interview closure, and follows the
+backend-owned result through the authoritative GET. The reception form fallback
+remains unchanged.
 
 ## Clinical language normalization
 
@@ -271,8 +275,9 @@ patient; Gemini REST produces the final preclassification:
    `ChatService.finalizarEntrevistaVoz` sends the summary plus the patient
    transcription to Gemini REST (`FINAL_SYSTEM_PROMPT` + voice clause: on conflict the
    transcription prevails). Once closure is accepted, it adds the transcription,
-   closes the interview and starts classification. A provider failure commits the
-   closed interview and `FALLIDA` state without a result or queue update.
+   closes the interview and starts classification. If recovery cannot produce a valid
+   result, the interview closes as `PARCIAL`, without an AI result or queue update;
+   transient API outages remain in automatic recovery.
 6. The Gemini REST result goes through the same validation, priority mapping,
    `Chat.resultadoTriageJson` and queue update as the text chat. If Gemini REST fails,
    a valid but incoherent result may request one correction within the remaining
@@ -280,15 +285,17 @@ patient; Gemini REST produces the final preclassification:
    alarms or validated affirmative final-result alarms require priority >=4 and
    immediate attention. The Live summary guides extraction; it does not independently
    impose a different priority floor. Invalid final structure and negation placeholders
-   in affirmative history/medication/allergy lists are also rejected. If correction
-   fails, the interview remains closed with state `FALLIDA`, no local replacement
-   and no classification queue update. Transcript persistence is idempotent.
+   in affirmative history/medication/allergy lists are also rejected. If recovery
+   cannot produce a valid result, the interview remains closed with state `PARCIAL`,
+   no local replacement and no classification queue update. Transcript persistence is
+   idempotent.
 
 There is no provider event proving that every input transcription has arrived.
 The normal close boundary preserves all frames received before its acknowledgement;
 the bounded drain reduces the chance of cutting off delayed transcriptions.
 An abnormal close or a close timeout after accepted closure saves the received
-transcript as a closed failed interview without classifying and emits an error.
+transcript and starts automatic recovery; it does not mark classification complete
+or assign a local result.
 
 If the voice session ends before `finalizar_entrevista` (patient hangs up,
 Gemini disconnects), the backend saves the unfinished transcription with
@@ -388,12 +395,14 @@ or HTTP 500. Relevant Gemini questions are preserved; scope decisions select a
 fixed clarification/redirection without clinical claims. A failed semantic correction returns HTTP 500
 (`ProveedorIaException`). Each Gemini REST invocation allows up to two HTTP attempts;
 a correction request uses the remaining time of the same 45-second operation budget.
-Transient HTTP and transport retries follow [the bounded Gemini retry policy](19-gemini-retries.md).
-Safety blocks, authentication errors and invalid JSON are not retried as HTTP
-requests. While collecting answers,
-failed text turns still roll back the undelivered patient message. Once final classification
-is requested, provider failure preserves the last answer, closes the interview and marks
-`FALLIDA`; no failed result or classification queue update is persisted.
+Historical retry details are in [Gemini REST retries](19-gemini-retries.md); current
+persisted recovery and API backoff are defined in
+[automatic chat recovery](34-automatic-chat-recovery.md). Safety blocks,
+authentication errors and invalid JSON are not retried as HTTP requests. While
+collecting answers, failed text turns still roll back the undelivered patient
+message. Once final classification is requested, accepted answers are preserved;
+failure to produce a valid result closes as `PARCIAL`, with no AI result or queue
+priority update.
 
 ## Priority Mapping
 

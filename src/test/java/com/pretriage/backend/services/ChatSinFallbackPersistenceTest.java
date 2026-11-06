@@ -24,6 +24,7 @@ import static org.mockito.Mockito.*;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class ChatSinFallbackPersistenceTest {
     @Autowired ChatService chatService;
+    @Autowired TextoTurnoService textoTurnoService;
     @Autowired JdbcTemplate db;
     @MockitoBean TriageIaClient proveedor;
     @MockitoBean AtencionHospitalService cola;
@@ -65,8 +66,10 @@ class ChatSinFallbackPersistenceTest {
     }
 
     @Test
-    void falloClasificacionVozPersisteCierreYTranscripcionSinResultadoNiDuplicados() {
-        when(proveedor.consultar(anyString(), anyString(), eq(true))).thenThrow(new ProveedorIaException(null));
+    void fallosClasificacionVozPersistenElCierreYCulminanParcialSinResultadoNiDuplicados() throws Exception {
+        when(proveedor.consultar(anyString(), anyString(), eq(true))).thenThrow(
+                new ProveedorIaException(new IllegalStateException("invalid response"),
+                        ProveedorIaException.Categoria.VALIDACION_RESPUESTA));
         var turnos = List.of(new TurnoVoz(AutorMensaje.PACIENTE, "Dolor de cabeza desde ayer, 8 de 10"),
                 new TurnoVoz(AutorMensaje.PACIENTE, "No tengo dificultad para respirar ni dolor de pecho"),
                 new TurnoVoz(AutorMensaje.PACIENTE, "No tengo enfermedades, alergias ni medicacion"),
@@ -74,23 +77,38 @@ class ChatSinFallbackPersistenceTest {
                 new TurnoVoz(AutorMensaje.PACIENTE, "No, no tengo más síntomas."));
         var resumen = new ResumenEntrevistaVoz("dolor de cabeza", List.of("dolor de cabeza"), "ayer", "igual", 8,
                 List.of(), List.of(), List.of(), List.of(), "no informado", "Caso sintetico");
-        assertThrows(ProveedorIaException.class, () -> chatService.finalizarEntrevistaVoz(chatId, pacienteAuth, turnos, resumen));
+        var respuesta = chatService.finalizarEntrevistaVoz(chatId, pacienteAuth, turnos, resumen);
+        assertEquals("PROCESAMIENTO_PENDIENTE", respuesta.origenRespuesta());
         assertTrue(chatService.obtenerChat(chatId, pacienteAuth).finalizado());
-        assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.FALLIDA,
+        assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.PENDIENTE,
                 chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion());
         chatService.registrarCierreVozFallido(chatId, pacienteAuth, turnos);
+        assertEquals(6, chatService.obtenerChat(chatId, pacienteAuth).mensajes().size());
+        assertEquals(1, db.queryForObject("SELECT count(*) FROM mensaje WHERE chat_id=? AND contenido=?", Integer.class,
+                Long.valueOf(chatId), "No, no tengo más síntomas."));
+        db.update("UPDATE chat SET proximo_reintento_en=CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE id=?", Long.valueOf(chatId));
+        textoTurnoService.recuperarPendientesPeriodicamente();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+        while (chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion()
+                != com.pretriage.backend.model.chat.EstadoClasificacionChat.PARCIAL && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
         var historial = chatService.obtenerChat(chatId, pacienteAuth).mensajes();
+        assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.PARCIAL,
+                chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion());
+        assertTrue(chatService.obtenerChat(chatId, pacienteAuth).cierreParcial());
         assertEquals(6, historial.size()); // greeting + three clinical turns + invitation + its answer
         assertEquals(1, historial.stream().filter(m -> m.contenido()
                 .equals("¿Hay algo más que quieras contar sobre lo que te pasa?")).count());
         assertEquals(1, historial.stream().filter(m -> m.contenido()
                 .equals("No, no tengo más síntomas.")).count());
         assertNull(db.queryForObject("SELECT resultado_triage_json FROM chat WHERE id=?", String.class, Long.valueOf(chatId)));
+        verify(proveedor, times(2)).consultar(anyString(), anyString(), eq(true));
         verifyNoInteractions(cola);
     }
 
     @Test
-    void transitorioDeVozDejaPendienteVisibleYRecuperaSinDuplicarTurnos() throws Exception {
+    void transitorioDeVozDejaPendienteVisibleYRecuperaTrasBackoffSinDuplicarTurnos() throws Exception {
         var turnos = List.of(new TurnoVoz(AutorMensaje.PACIENTE, "Dolor de cabeza desde ayer, 8 de 10"),
                 new TurnoVoz(AutorMensaje.PACIENTE, "No tengo dificultad para respirar ni dolor de pecho"),
                 new TurnoVoz(AutorMensaje.PACIENTE, "No tengo enfermedades, alergias ni medicacion"),
@@ -122,6 +140,17 @@ class ChatSinFallbackPersistenceTest {
         releaseProvider.countDown();
         closing.get(30, TimeUnit.SECONDS);
 
+        var esperando = chatService.obtenerChat(chatId, pacienteAuth);
+        assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.PENDIENTE, esperando.estadoClasificacion());
+        assertEquals(com.pretriage.backend.model.chat.EstadoRecuperacionChat.ESPERANDO_API, esperando.estadoRecuperacion());
+        assertEquals(1, calls.get());
+        db.update("UPDATE chat SET proximo_reintento_en=CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE id=?", Long.valueOf(chatId));
+        textoTurnoService.recuperarPendientesPeriodicamente();
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+        while (chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion()
+                == com.pretriage.backend.model.chat.EstadoClasificacionChat.PENDIENTE
+                && System.nanoTime() < deadline) Thread.sleep(20);
         assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.COMPLETADA,
                 chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion());
         assertEquals(4, db.queryForObject("SELECT count(*) FROM mensaje WHERE chat_id=? AND autor='PACIENTE'",
@@ -149,8 +178,14 @@ class ChatSinFallbackPersistenceTest {
             return new TriageAiResponse(true, "Gracias", resultado);
         });
 
-        assertThrows(ProveedorIaException.class,
-                () -> chatService.enviarMensaje(chatId, pacienteAuth, "Tengo dolor de pecho"));
+        var aceptado = chatService.enviarMensaje(chatId, pacienteAuth, "Tengo dolor de pecho");
+        assertEquals("PROCESAMIENTO_PENDIENTE", aceptado.origenRespuesta());
+        assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.PENDIENTE,
+                chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion());
+        assertEquals(com.pretriage.backend.model.chat.EstadoRecuperacionChat.ESPERANDO_API,
+                chatService.obtenerChat(chatId, pacienteAuth).estadoRecuperacion());
+        db.update("UPDATE chat SET proximo_reintento_en=CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE id=?", Long.valueOf(chatId));
+        textoTurnoService.recuperarPendientesPeriodicamente();
         assertTrue(retryStarted.await(10, TimeUnit.SECONDS));
         assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.PENDIENTE,
                 chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion());
@@ -171,22 +206,27 @@ class ChatSinFallbackPersistenceTest {
     }
 
     @Test
-    void falloTextoCierraYReintentoSinMensajeActualizaColaUnaVez() {
-        when(proveedor.consultar(anyString(), anyString(), eq(true))).thenThrow(new ProveedorIaException(null));
-        assertThrows(ProveedorIaException.class, () -> chatService.enviarMensaje(chatId, pacienteAuth, "Tengo dolor de pecho"));
-        var cerrado = chatService.obtenerChat(chatId, pacienteAuth);
-        assertTrue(cerrado.finalizado());
-        assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.FALLIDA, cerrado.estadoClasificacion());
-        assertEquals(2, cerrado.mensajes().size());
-        when(proveedor.consultar(anyString(), anyString(), eq(true))).thenReturn(new TriageAiResponse(true, "Gracias",
+    void falloTextoEnCierreQuedaPendienteYRecuperaSinDuplicarMensajeNiCola() throws Exception {
+        when(proveedor.consultar(anyString(), anyString(), eq(true)))
+                .thenThrow(new ProveedorIaException(new IllegalStateException("invalid response"),
+                        ProveedorIaException.Categoria.VALIDACION_RESPUESTA))
+                .thenReturn(new TriageAiResponse(true, "Gracias",
                 new TriageResultDTO("dolor de pecho", List.of("dolor de pecho"), "no informado", "no informado", null,
                         List.of("dolor toracico"), List.of(), List.of(), List.of(), "no informado", "no informado", 4, true, "Acudir a guardia")));
-        chatService.reintentarClasificacion(chatId, pacienteAuth);
+        var aceptado = chatService.enviarMensaje(chatId, pacienteAuth, "Tengo dolor de pecho");
+        assertEquals("PROCESAMIENTO_PENDIENTE", aceptado.origenRespuesta());
+        assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.PENDIENTE,
+                chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion());
+        db.update("UPDATE chat SET proximo_reintento_en=CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE id=?", Long.valueOf(chatId));
+        textoTurnoService.recuperarPendientesPeriodicamente();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+        while (chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion()
+                == com.pretriage.backend.model.chat.EstadoClasificacionChat.PENDIENTE
+                && System.nanoTime() < deadline) Thread.sleep(20);
         assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.COMPLETADA,
                 chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion());
         assertEquals(1, db.queryForObject("SELECT count(*) FROM mensaje WHERE chat_id=? AND autor='PACIENTE'", Integer.class, Long.valueOf(chatId)));
-        assertThrows(com.pretriage.backend.exceptions.ChatFinalizadoException.class,
-                () -> chatService.reintentarClasificacion(chatId, pacienteAuth));
+        verify(proveedor, times(2)).consultar(anyString(), anyString(), eq(true));
         verify(cola, times(1)).finalizarTriageEIngresarACola(eq(pacienteAuth), any(), anyString(), any());
     }
 
