@@ -12,6 +12,7 @@ import com.pretriage.backend.repositories.RepoRecepcionistas;
 import com.pretriage.backend.services.AuthService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -42,9 +43,16 @@ public class AuthController {
 
         String auth0Id = authService.registrarUsuarioYObtenerAuth0Id(request.getEmail(), request.getPassword());
 
-        String email = request.getEmail();
-
-        this.crearPaciente(request, email, auth0Id);
+        if (repoPacientes.findByUsuarioAuthId(auth0Id).isEmpty()) {
+            try {
+                crearPaciente(request, request.getEmail(), auth0Id);
+            } catch (DataIntegrityViolationException conflict) {
+                // A concurrent request may have completed registration for this Auth0 identity.
+                if (repoPacientes.findByUsuarioAuthId(auth0Id).isEmpty()) {
+                    throw conflict;
+                }
+            }
+        }
 
         return ResponseEntity.ok(Map.of("message", "usuario creado con éxito"));
     }
