@@ -13,10 +13,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+
+import java.util.Optional;
 
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -68,6 +71,33 @@ class AuthControllerTest {
                 paciente.getUsuarioAuth().getRol() == RolSistema.USER
                         && "auth0|paciente-prueba".equals(paciente.getUsuarioAuth().getId())));
         verifyNoInteractions(repoMedico, repoRecepcionistas);
+    }
+
+    @Test
+    void reintentarRegistroDePacienteExistente_retorna200SinGuardarOtraVez() throws Exception {
+        when(authService.registrarUsuarioYObtenerAuth0Id("patient@example.com", "TestPassword123!"))
+                .thenReturn("auth0|paciente-prueba");
+        when(repoPacientes.findByUsuarioAuthId("auth0|paciente-prueba")).thenReturn(Optional.of(new Paciente()));
+
+        mockMvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
+                        .content(registro(",\"rol\":\"USER\"")))
+                .andExpect(status().isOk());
+
+        verify(repoPacientes, never()).save(any());
+    }
+
+    @Test
+    void registroConcurrenteDelMismoPaciente_retorna200CuandoElOtroRegistroSeCompleta() throws Exception {
+        when(authService.registrarUsuarioYObtenerAuth0Id("patient@example.com", "TestPassword123!"))
+                .thenReturn("auth0|paciente-prueba");
+        when(repoPacientes.findByUsuarioAuthId("auth0|paciente-prueba"))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(new Paciente()));
+        when(repoPacientes.save(any())).thenThrow(new DataIntegrityViolationException("Identidad duplicada"));
+
+        mockMvc.perform(post("/api/register").contentType(MediaType.APPLICATION_JSON)
+                        .content(registro(",\"rol\":\"USER\"")))
+                .andExpect(status().isOk());
     }
 
     @Test
