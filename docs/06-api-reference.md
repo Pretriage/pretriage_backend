@@ -51,6 +51,11 @@ Creates the Auth0 account and the local patient record. The password must
 contain between 8 and 72 characters including uppercase, lowercase, numeric and
 symbol characters.
 
+When the Auth0 account already exists, the backend verifies the supplied credentials.
+A retry for the same Auth0 identity returns `200` if the patient record already
+exists and preserves that record. If the Auth0 account exists without a local
+patient record, the request can complete the registration.
+
 ### Login
 
 ```http
