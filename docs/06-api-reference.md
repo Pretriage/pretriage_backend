@@ -1008,6 +1008,9 @@ GET /api/pacientes/{idPaciente}/obrasocial/credenciales
 POST /api/pacientes/{idPaciente}/obrasocial/credencial
 ```
 
+Reception can add or update a credential only when `fechaVencimiento` is strictly after the
+current date in Argentina. The request uses the ISO date format (`YYYY-MM-DD`).
+
 Body:
 
 ```json
@@ -1030,6 +1033,9 @@ DELETE /api/pacientes/{idPaciente}/obrasocial/credenciales/{idCredencial}
 ```http
 PUT /api/pacientes/{idPaciente}/obrasocial/credenciales/{idCredencial}
 ```
+
+The receptionist can keep the current obra social and affiliate number when editing the plan or
+expiration date. A number already assigned to another credential for that obra social is rejected.
 
 Body:
 

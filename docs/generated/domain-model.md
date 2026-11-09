@@ -276,6 +276,9 @@ erDiagram
     ADMISION_RECEPCION {
         Long id
         EstadoAdmisionRecepcion estado
+        Boolean coberturaConfirmada
+        Long credencialCoberturaId
+        String nombreObraSocialCobertura
         String formularioJson
         String resultadoTriageJson
         LocalDateTime fechaHoraInicio
