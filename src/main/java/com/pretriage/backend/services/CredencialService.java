@@ -23,6 +23,8 @@ import org.jspecify.annotations.NonNull;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 
@@ -30,6 +32,7 @@ import java.util.Optional;
 @RequiredArgsConstructor
 @Transactional
 public class CredencialService {
+    private static final ZoneId ZONA_ARGENTINA = ZoneId.of("America/Argentina/Buenos_Aires");
 
     private final PacienteService pacienteService;
     private final RecepcionistaService recepcionistaService;
@@ -77,6 +80,7 @@ public class CredencialService {
 
         Paciente paciente = pacienteService.obtenerPaciente(idPaciente);
 
+        validarVencimientoRecepcion(request);
         cargarCredencial(request, paciente);
     }
 
@@ -113,7 +117,7 @@ public class CredencialService {
         ObraSocial obraSocial = obtenerObraSocial(
                 request.getNombreObraSocial());
 
-        validarCredencial(request, paciente);
+        validarCredencial(request, paciente, null);
 
         Credencial credencial = new Credencial();
         credencial.setObraSocial(obraSocial);
@@ -125,7 +129,7 @@ public class CredencialService {
         repoCredenciales.save(credencial);
     }
 
-    private void validarCredencial(CredencialRequest request, Paciente paciente) {
+    private void validarCredencial(CredencialRequest request, Paciente paciente, Long idCredencialEditada) {
         ValidadorCredencialObraSocial validador = fabricaValidadoresCredencialesObraSocial
                 .obtenerValidador(request.getNombreObraSocial());
 
@@ -134,8 +138,15 @@ public class CredencialService {
 
         Optional<Credencial> opCredencial = this.repoCredenciales.findByNumeroAfiliadoAndObraSocialNombre(request.getNumeroAfiliado(), request.getNombreObraSocial().toUpperCase());
         
-        if(opCredencial.isPresent()){
+        if (opCredencial.filter(registrada -> idCredencialEditada == null
+                || !idCredencialEditada.equals(registrada.getId())).isPresent()) {
             throw new CredencialValidaYaExisteException();
+        }
+    }
+
+    private void validarVencimientoRecepcion(CredencialRequest request) {
+        if (!request.getFechaVencimiento().isAfter(LocalDate.now(ZONA_ARGENTINA))) {
+            throw new IllegalArgumentException("La fecha de vencimiento debe ser posterior a hoy.");
         }
     }
 
@@ -167,7 +178,7 @@ public class CredencialService {
 
         Credencial credencial = this.obtenerCredencialYVerificarPermiso(paciente.getId(), idCredencial);
 
-        validarCredencial(request, paciente);
+        validarCredencial(request, paciente, null);
 
         ObraSocial obraSocial = obtenerObraSocial(
                 request.getNombreObraSocial());
@@ -190,7 +201,8 @@ public class CredencialService {
         Credencial credencial = this.obtenerCredencialYVerificarPermisoRecepcionista(auth0IdRecepcionista, idPaciente,
                 idCredencial);
 
-        this.validarCredencial(request, credencial.getPaciente());
+        validarVencimientoRecepcion(request);
+        validarCredencial(request, credencial.getPaciente(), idCredencial);
 
         ObraSocial obraSocial = this.obtenerObraSocial(
                 request.getNombreObraSocial());

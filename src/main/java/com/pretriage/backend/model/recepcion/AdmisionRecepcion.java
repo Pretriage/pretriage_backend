@@ -17,6 +17,9 @@ public class AdmisionRecepcion {
     private SesionRecepcion sesionRecepcion;
     @Enumerated(EnumType.STRING)
     private EstadoAdmisionRecepcion estado;
+    private Boolean coberturaConfirmada;
+    private Long credencialCoberturaId;
+    private String nombreObraSocialCobertura;
     @Column(columnDefinition = "TEXT")
     private String formularioJson;
     @Column(columnDefinition = "TEXT")

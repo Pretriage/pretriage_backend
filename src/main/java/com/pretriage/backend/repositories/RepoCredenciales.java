@@ -17,6 +17,8 @@ public interface RepoCredenciales extends JpaRepository<Credencial, Long> {
 
     List<Credencial> findByPacienteId(Long pacienteId);
 
+    Optional<Credencial> findByIdAndPacienteId(Long id, Long pacienteId);
+
     Optional<Credencial> findByNumeroAfiliadoAndObraSocialNombre(String numeroAfiliado, String nombre);
 
 }

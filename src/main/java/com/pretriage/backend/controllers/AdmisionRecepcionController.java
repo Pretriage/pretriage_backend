@@ -45,6 +45,12 @@ public class AdmisionRecepcionController {
             @RequestBody @Valid CrearAdmisionRecepcionRequest request) {
         return ResponseEntity.ok(service.crearAdmision(jwt.getSubject(), request));
     }
+    @PutMapping("/admisiones/{admisionId}/cobertura")
+    public ResponseEntity<CoberturaRecepcionDTO> seleccionarCobertura(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long admisionId,
+            @RequestBody @Valid SeleccionCoberturaRecepcionRequest request) {
+        return ResponseEntity.ok(service.seleccionarCobertura(jwt.getSubject(), admisionId, request.credencialId()));
+    }
     @PostMapping("/admisiones/{admisionId}/finalizar")
     public ResponseEntity<AdmisionRecepcionDTO> finalizar(@AuthenticationPrincipal Jwt jwt,
             @PathVariable Long admisionId,

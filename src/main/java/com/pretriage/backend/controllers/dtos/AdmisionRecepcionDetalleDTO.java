@@ -12,5 +12,6 @@ public record AdmisionRecepcionDetalleDTO(
         String especialidadCodigo, String especialidadNombre, String codigoLlamado,
         EstadoAdmisionRecepcion estado, NivelDeGravedad prioridad,
         LocalDateTime fechaHoraInicio, LocalDateTime fechaHoraFinalizacion,
-        LocalDateTime fechaHoraCancelacion, TiempoEstimadoAtencionResponse estimacion) {
+        LocalDateTime fechaHoraCancelacion, TiempoEstimadoAtencionResponse estimacion,
+        boolean coberturaConfirmada, CoberturaRecepcionDTO cobertura) {
 }

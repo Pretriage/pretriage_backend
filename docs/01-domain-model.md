@@ -251,6 +251,9 @@ or use `Chat`. Important fields:
 - `consultaMedica`
 - `sesionRecepcion`
 - `estado`
+- `coberturaConfirmada`, `credencialCoberturaId`, and `nombreObraSocialCobertura` record the
+  admission's coverage choice. The ID and provider are saved as values so later changes to
+  the patient's credentials do not rewrite the admission.
 - `formularioJson`
 - `resultadoTriageJson`
 - `fechaHoraInicio`
