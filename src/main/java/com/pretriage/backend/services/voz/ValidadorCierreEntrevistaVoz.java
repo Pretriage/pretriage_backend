@@ -232,6 +232,14 @@ public final class ValidadorCierreEntrevistaVoz {
         return ultima;
     }
 
+    public static Integer maximaIntensidadLiteral(String relato) {
+        String texto = normalizar(relato);
+        if (!contiene(texto, "dolor|duele|duelen|cefalea")) return null;
+        return INTENSIDAD.matcher(texto).results()
+                .map(coincidencia -> Integer.valueOf(coincidencia.group(1)))
+                .max(Integer::compareTo).orElse(null);
+    }
+
     private static Integer extraerIntensidad(String texto, String pregunta) {
         var matcher = INTENSIDAD.matcher(texto);
         Integer ultima = null;

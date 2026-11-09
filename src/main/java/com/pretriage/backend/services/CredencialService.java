@@ -23,16 +23,21 @@ import org.jspecify.annotations.NonNull;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
+import java.text.Normalizer;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
 @Transactional
 public class CredencialService {
     private static final ZoneId ZONA_ARGENTINA = ZoneId.of("America/Argentina/Buenos_Aires");
+    private static final Pattern DIACRITICOS = Pattern.compile("\\p{M}+");
 
     private final PacienteService pacienteService;
     private final RecepcionistaService recepcionistaService;
@@ -47,7 +52,7 @@ public class CredencialService {
 
         Paciente paciente = this.obtenerPaciente(auth0IdPaciente);
 
-        this.cargarCredencial(request, paciente);
+        cargarCredencial(request, paciente, request.getFechaVencimiento());
     }
 
     @Transactional
@@ -80,8 +85,7 @@ public class CredencialService {
 
         Paciente paciente = pacienteService.obtenerPaciente(idPaciente);
 
-        validarVencimientoRecepcion(request);
-        cargarCredencial(request, paciente);
+        cargarCredencial(request, paciente, vencimientoRecepcion(request.getFechaVencimiento()));
     }
 
     private Paciente obtenerPaciente(String auth0IdPaciente) {
@@ -106,37 +110,51 @@ public class CredencialService {
         }
     }
 
-    private ObraSocial obtenerObraSocial(String nombre) {
-
+    private Optional<ObraSocial> buscarObraSocial(String nombre) {
+        String nombreIngresado = nombre.strip();
         return repoObraSociales
-                .findByNombreEqualsIgnoreCaseAndVirgenteTrue(nombre)
-                .orElseThrow(ObraSocialNoExisteException::new);
+                .findByNombreEqualsIgnoreCaseAndVirgenteTrue(nombreIngresado)
+                .or(() -> {
+                    String clave = claveObraSocial(nombreIngresado);
+                    List<ObraSocial> coincidencias = repoObraSociales.findByVirgenteTrue().stream()
+                            .filter(obraSocial -> claveObraSocial(obraSocial.getNombre()).equals(clave))
+                            .toList();
+                    return coincidencias.size() == 1 ? Optional.of(coincidencias.getFirst()) : Optional.empty();
+                });
     }
 
-    private void cargarCredencial(CredencialRequest request, Paciente paciente) {
-        ObraSocial obraSocial = obtenerObraSocial(
-                request.getNombreObraSocial());
+    private static String claveObraSocial(String nombre) {
+        String descompuesto = Normalizer.normalize(nombre.strip(), Normalizer.Form.NFD);
+        return DIACRITICOS.matcher(descompuesto).replaceAll("").toUpperCase(Locale.ROOT);
+    }
 
-        validarCredencial(request, paciente, null);
+    private void cargarCredencial(CredencialRequest request, Paciente paciente, LocalDate fechaVencimiento) {
+        ObraSocial obraSocial = buscarObraSocial(request.getNombreObraSocial())
+                .orElseThrow(ObraSocialNoExisteException::new);
+        validarConProveedor(request, paciente, obraSocial.getNombre());
+        validarNumeroAfiliado(request, obraSocial, null);
 
         Credencial credencial = new Credencial();
         credencial.setObraSocial(obraSocial);
         credencial.setNumeroAfiliado(request.getNumeroAfiliado());
         credencial.setPlan(request.getPlan());
-        credencial.setFechaVencimiento(request.getFechaVencimiento());
+        credencial.setFechaVencimiento(fechaVencimiento);
         credencial.setPaciente(paciente);
 
         repoCredenciales.save(credencial);
     }
 
-    private void validarCredencial(CredencialRequest request, Paciente paciente, Long idCredencialEditada) {
+    private void validarConProveedor(CredencialRequest request, Paciente paciente, String nombreObraSocial) {
         ValidadorCredencialObraSocial validador = fabricaValidadoresCredencialesObraSocial
-                .obtenerValidador(request.getNombreObraSocial());
+                .obtenerValidador(nombreObraSocial);
 
         validacionCredencialObraSocialService
                 .validarCredencialObraSocial(request, paciente, validador);
+    }
 
-        Optional<Credencial> opCredencial = this.repoCredenciales.findByNumeroAfiliadoAndObraSocialNombre(request.getNumeroAfiliado(), request.getNombreObraSocial().toUpperCase());
+    private void validarNumeroAfiliado(CredencialRequest request, ObraSocial obraSocial, Long idCredencialEditada) {
+        Optional<Credencial> opCredencial = repoCredenciales.findByNumeroAfiliadoAndObraSocialNombre(
+                request.getNumeroAfiliado(), obraSocial.getNombre());
         
         if (opCredencial.filter(registrada -> idCredencialEditada == null
                 || !idCredencialEditada.equals(registrada.getId())).isPresent()) {
@@ -144,10 +162,20 @@ public class CredencialService {
         }
     }
 
-    private void validarVencimientoRecepcion(CredencialRequest request) {
-        if (!request.getFechaVencimiento().isAfter(LocalDate.now(ZONA_ARGENTINA))) {
+    private ObraSocial validarObraSocialEditada(CredencialRequest request, Paciente paciente, Long idCredencialEditada) {
+        Optional<ObraSocial> candidata = buscarObraSocial(request.getNombreObraSocial());
+        validarConProveedor(request, paciente, candidata.map(ObraSocial::getNombre).orElse(request.getNombreObraSocial()));
+        ObraSocial obraSocial = candidata.orElseThrow(ObraSocialNoExisteException::new);
+        validarNumeroAfiliado(request, obraSocial, idCredencialEditada);
+        return obraSocial;
+    }
+
+    private LocalDate vencimientoRecepcion(LocalDate fecha) {
+        LocalDate finDelMes = YearMonth.from(fecha).atEndOfMonth();
+        if (!finDelMes.isAfter(LocalDate.now(ZONA_ARGENTINA))) {
             throw new IllegalArgumentException("La fecha de vencimiento debe ser posterior a hoy.");
         }
+        return finDelMes;
     }
 
     @Transactional
@@ -178,10 +206,7 @@ public class CredencialService {
 
         Credencial credencial = this.obtenerCredencialYVerificarPermiso(paciente.getId(), idCredencial);
 
-        validarCredencial(request, paciente, null);
-
-        ObraSocial obraSocial = obtenerObraSocial(
-                request.getNombreObraSocial());
+        ObraSocial obraSocial = validarObraSocialEditada(request, paciente, null);
 
         credencial.setObraSocial(obraSocial);
         credencial.setNumeroAfiliado(request.getNumeroAfiliado());
@@ -201,16 +226,14 @@ public class CredencialService {
         Credencial credencial = this.obtenerCredencialYVerificarPermisoRecepcionista(auth0IdRecepcionista, idPaciente,
                 idCredencial);
 
-        validarVencimientoRecepcion(request);
-        validarCredencial(request, credencial.getPaciente(), idCredencial);
+        LocalDate fechaVencimiento = vencimientoRecepcion(request.getFechaVencimiento());
 
-        ObraSocial obraSocial = this.obtenerObraSocial(
-                request.getNombreObraSocial());
+        ObraSocial obraSocial = validarObraSocialEditada(request, credencial.getPaciente(), idCredencial);
 
         credencial.setObraSocial(obraSocial);
         credencial.setNumeroAfiliado(request.getNumeroAfiliado());
         credencial.setPlan(request.getPlan());
-        credencial.setFechaVencimiento(request.getFechaVencimiento());
+        credencial.setFechaVencimiento(fechaVencimiento);
 
         repoCredenciales.save(credencial);
     }

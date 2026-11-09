@@ -251,6 +251,23 @@ pretriage.cambio-contrasenia-autenticado.max-intentos=${PRETRIAGE_CAMBIO_AUTENTI
 pretriage.cambio-contrasenia-autenticado.horas-bloqueo=${PRETRIAGE_CAMBIO_AUTENTICADO_HORAS_BLOQUEO:24}
 ```
 
+### Staff account profile
+
+```http
+GET /api/staff/me
+PUT /api/staff/me
+```
+
+Both routes require a bearer JWT. The account is resolved from its `sub`.
+The PUT accepts `{"nombre":"Ana","apellido":"Pérez"}`. Both fields are required,
+accept up to 120 characters each and have leading and trailing whitespace removed
+before saving. The update is limited to these two account fields.
+
+Both return `StaffMeResponse` with `id`, `nombre`, `apellido`, `email`,
+`administradorPlataforma` and the active `membresias`. A failed field
+validation returns `400` with a field-to-message map. An authenticated
+identity without a local account returns `404`.
+
 ## Specialties
 
 ### List Specialties
@@ -1008,8 +1025,12 @@ GET /api/pacientes/{idPaciente}/obrasocial/credenciales
 POST /api/pacientes/{idPaciente}/obrasocial/credencial
 ```
 
-Reception can add or update a credential only when `fechaVencimiento` is strictly after the
-current date in Argentina. The request uses the ISO date format (`YYYY-MM-DD`).
+Reception credentials expire at the end of the selected month. The request keeps the ISO date
+format (`YYYY-MM-DD`), and reception stores the last day of that month. That date must be strictly
+after the current date in Argentina. Provider lookup prefers the exact catalog name ignoring case
+and accepts an accent-insensitive match when it identifies one active provider, such as Medifé for MEDIFE.
+The plan name or code supports up to 255 characters. Letters with accents and symbols
+used in published plan names are accepted, such as `Accord 1.5`, `Medife+`, and `A-401`.
 
 Body:
 

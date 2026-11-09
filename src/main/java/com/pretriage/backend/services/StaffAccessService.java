@@ -42,10 +42,21 @@ public class StaffAccessService {
 
     @Transactional
     public StaffMeResponse obtenerContexto(String subject) {
+        return contexto(usuario(subject));
+    }
+
+    @Transactional
+    public StaffMeResponse actualizarPerfil(String subject, ActualizarPerfilStaffRequest request) {
         UsuarioAuth usuario = usuario(subject);
+        usuario.setNombre(request.nombre().strip());
+        usuario.setApellido(request.apellido().strip());
+        return contexto(usuario);
+    }
+
+    private StaffMeResponse contexto(UsuarioAuth usuario) {
         migrarAccesosLegados(usuario);
         List<MembresiaResponse> accesos = membresias
-                .findByUsuarioIdAndEstado(subject, EstadoMembresiaHospital.ACTIVA).stream()
+                .findByUsuarioIdAndEstado(usuario.getId(), EstadoMembresiaHospital.ACTIVA).stream()
                 .map(this::aMembresiaResponse).toList();
         return new StaffMeResponse(usuario.getId(), usuario.getNombre(), usuario.getApellido(),
                 usuario.getCorreoElectronico(), usuario.getRol() == RolSistema.ADMIN, accesos);

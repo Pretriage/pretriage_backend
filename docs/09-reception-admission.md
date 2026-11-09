@@ -23,8 +23,9 @@ A receptionist can admit a patient identified by DNI, collect a structured clini
 2. Resume the active reception session or start one for a hospital.
 3. Search by normalized DNI.
 4. Create an admission, reusing or creating the patient.
-   Select an existing credential, add or edit one, or confirm that the admission has no coverage.
-5. Complete the whole structured form.
+   Select an existing credential, add, edit or delete one, or confirm that the admission has no coverage.
+   The web preselects the only eligible credential when coverage has not yet been confirmed.
+5. Record the main complaint, onset, evolution and any additional symptoms or relevant context.
 6. Finalize once. `TriageFormularioService` classifies the form in one AI call, without conversation.
 7. The receptionist cannot submit or modify priority.
 8. The sector is assigned automatically at admission creation
@@ -50,7 +51,9 @@ A receptionist can admit a patient identified by DNI, collect a structured clini
 - Patient lookup reports whether an active consultation exists and its current
   state, so reception can show the conflict before submitting a new admission.
   Admission creation still enforces the same rule authoritatively.
-- A selected credential must belong to the patient and expire after the current date in Argentina.
+- A selected credential must belong to the patient and its expiry month must end after the current
+  date in Argentina. The web displays month and year and the backend stores the last day of the month
+  for new and edited reception credentials.
   The receptionist who owns the admission can change its coverage while the admission is open
   and the reception session is active. The selection stores the credential ID and provider name
   on the admission without depending on future credential changes or deletions.
@@ -67,10 +70,12 @@ A receptionist can admit a patient identified by DNI, collect a structured clini
 - The required `motivoConsulta` is the concise patient-language account of the
   main complaint. Additional symptoms are optional and must not duplicate that
   narrative merely to satisfy validation.
-- Pain is a repeatable structured list (`dolores`) with location and intensity
-  from 0 to 10. The classifier considers every entry and uses the highest
-  intensity in its normalized result and deterministic fallback.
-- If the AI provider fails, a conservative deterministic fallback classifies explicit alarm signs and severe pain.
+- The classifier reads reported symptoms and alarm signs from the main complaint and additional
+  symptoms. An omitted field does not mean that a symptom was denied. The web sends an empty
+  `dolores` list for API compatibility and omits the optional `fiebre` and `signosAlarma` fields.
+  Structured pain entries from earlier clients remain valid and keep their highest reported intensity.
+- If the AI provider fails, the deterministic fallback uses the shared literal alarm detector
+  on the reported text and preserves an explicit pain rating when the text includes one.
 - External AI calls have bounded connect/read timeouts. A stopped or stalled
   Gemini REST request must reach the same deterministic fallback instead of leaving
   the admission request pending indefinitely.

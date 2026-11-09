@@ -33,9 +33,10 @@ public class CredencialRequest {
     private String numeroAfiliado;
 
     @NotBlank(message = "El plan es obligatorio")
+    @Size(max = 255, message = "El plan no puede superar los 255 caracteres")
     @Pattern(
-            regexp = "^[A-Za-z0-9 ]+$",
-            message = "El plan solo puede contener caracteres alfanuméricos"
+            regexp = "^[\\p{L}\\p{M}\\p{N} .+()/-]+$",
+            message = "Ingresá el nombre o código que figura en la credencial"
     )
     private String plan;
 

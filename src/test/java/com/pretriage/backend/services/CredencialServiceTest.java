@@ -496,7 +496,8 @@ class CredencialServiceTest {
         assertEquals(nombreObraSocial, credencial.getObraSocial().getNombre());
         assertEquals(numeroAfiliado, credencial.getNumeroAfiliado());
         assertEquals(plan, credencial.getPlan());
-        assertEquals(request.getFechaVencimiento(), credencial.getFechaVencimiento());
+        assertEquals(request.getFechaVencimiento().with(java.time.temporal.TemporalAdjusters.lastDayOfMonth()),
+                credencial.getFechaVencimiento());
         verify(repoCredenciales).save(credencial);
     }
 
@@ -509,6 +510,8 @@ class CredencialServiceTest {
         credencialEditada.setPaciente(paciente);
         Credencial credencialExistente = new Credencial();
         credencialExistente.setId(3L);
+        ObraSocial obraSocial = new ObraSocial();
+        obraSocial.setNombre("OSDE");
         CredencialRequest request = new CredencialRequest();
         request.setNombreObraSocial("OSDE");
         request.setNumeroAfiliado("123456");
@@ -516,6 +519,7 @@ class CredencialServiceTest {
         when(recepcionistaService.esRecepcionistaConUsuarioId("recepcion")).thenReturn(true);
         when(pacienteService.obtenerPaciente(1L)).thenReturn(paciente);
         when(repoCredenciales.findById(2L)).thenReturn(Optional.of(credencialEditada));
+        when(repoObraSociales.findByNombreEqualsIgnoreCaseAndVirgenteTrue("OSDE")).thenReturn(Optional.of(obraSocial));
         when(repoCredenciales.findByNumeroAfiliadoAndObraSocialNombre("123456", "OSDE"))
                 .thenReturn(Optional.of(credencialExistente));
 
@@ -525,14 +529,15 @@ class CredencialServiceTest {
     }
 
     @Test
-    void recepcionNoPuedeCargarNiEditarUnaCredencialConVencimientoDeHoy() {
+    void recepcionNoPuedeCargarNiEditarUnaCredencialDeUnMesVencido() {
         Paciente paciente = new Paciente();
         paciente.setId(1L);
         Credencial credencial = new Credencial();
         credencial.setId(2L);
         credencial.setPaciente(paciente);
         CredencialRequest request = new CredencialRequest();
-        request.setFechaVencimiento(LocalDate.now(ZoneId.of("America/Argentina/Buenos_Aires")));
+        request.setFechaVencimiento(LocalDate.now(ZoneId.of("America/Argentina/Buenos_Aires"))
+                .withDayOfMonth(1).minusDays(1));
         when(recepcionistaService.esRecepcionistaConUsuarioId("recepcion")).thenReturn(true);
         when(pacienteService.obtenerPaciente(1L)).thenReturn(paciente);
         when(repoCredenciales.findById(2L)).thenReturn(Optional.of(credencial));
@@ -542,6 +547,33 @@ class CredencialServiceTest {
         assertThrows(IllegalArgumentException.class,
                 () -> service.editarCredencialRecepcionista(2L, 1L, "recepcion", request));
         verify(repoCredenciales, never()).save(any());
+    }
+
+    @Test
+    void recepcionResuelveMedifeConTildeYGuardaElFinDelMes() {
+        Paciente paciente = new Paciente();
+        paciente.setId(1L);
+        ObraSocial obraSocial = new ObraSocial();
+        obraSocial.setNombre("MEDIFE");
+        CredencialRequest request = new CredencialRequest();
+        request.setNombreObraSocial("Medifé");
+        request.setNumeroAfiliado("123456");
+        request.setPlan("310");
+        LocalDate mesSiguiente = LocalDate.now(ZoneId.of("America/Argentina/Buenos_Aires"))
+                .plusMonths(1).withDayOfMonth(1);
+        request.setFechaVencimiento(mesSiguiente);
+        when(recepcionistaService.esRecepcionistaConUsuarioId("recepcion")).thenReturn(true);
+        when(pacienteService.obtenerPaciente(1L)).thenReturn(paciente);
+        when(repoObraSociales.findByVirgenteTrue()).thenReturn(List.of(obraSocial));
+
+        service.cargarCredencialRecepcionista("recepcion", 1L, request);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(Credencial.class);
+        verify(repoCredenciales).save(captor.capture());
+        assertEquals(obraSocial, captor.getValue().getObraSocial());
+        assertEquals(mesSiguiente.with(java.time.temporal.TemporalAdjusters.lastDayOfMonth()),
+                captor.getValue().getFechaVencimiento());
+        verify(repoCredenciales).findByNumeroAfiliadoAndObraSocialNombre("123456", "MEDIFE");
     }
 
     @Test

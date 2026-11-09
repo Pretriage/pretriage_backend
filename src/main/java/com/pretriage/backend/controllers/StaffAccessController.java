@@ -22,6 +22,12 @@ public class StaffAccessController {
         return service.obtenerContexto(jwt.getSubject());
     }
 
+    @PutMapping("/staff/me")
+    public StaffMeResponse actualizarPerfil(@AuthenticationPrincipal Jwt jwt,
+                                            @Valid @RequestBody ActualizarPerfilStaffRequest request) {
+        return service.actualizarPerfil(jwt.getSubject(), request);
+    }
+
     @GetMapping("/admin/hospitales/{hospitalId}/personal")
     public List<PersonalResponse> personal(@AuthenticationPrincipal Jwt jwt,
                                            @PathVariable("hospitalId") Long hospitalId) {

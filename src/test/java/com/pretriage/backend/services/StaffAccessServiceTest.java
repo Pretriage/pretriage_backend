@@ -1,6 +1,7 @@
 package com.pretriage.backend.services;
 
 import com.pretriage.backend.controllers.dtos.acceso.StaffAccessDtos.ActualizarMembresiaRequest;
+import com.pretriage.backend.controllers.dtos.acceso.StaffAccessDtos.ActualizarPerfilStaffRequest;
 import com.pretriage.backend.controllers.dtos.acceso.StaffAccessDtos.CrearInvitacionRequest;
 import com.pretriage.backend.controllers.dtos.acceso.StaffAccessDtos.RegistrarInvitadoRequest;
 import com.pretriage.backend.exceptions.ConflictoDeEstadoException;
@@ -22,6 +23,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.time.Instant;
@@ -76,8 +78,25 @@ class StaffAccessServiceTest {
         when(usuarios.findById(admin.getId())).thenReturn(Optional.of(admin));
         when(recepcionistas.findRecepcionistaByUsuarioAuthId(admin.getId())).thenReturn(Optional.empty());
         when(asignaciones.findByMedicoUsuarioAuthId(admin.getId())).thenReturn(java.util.List.of());
-        when(membresias.findByUsuarioIdAndHospitalId(admin.getId(), hospital.getId()))
+        lenient().when(membresias.findByUsuarioIdAndHospitalId(admin.getId(), hospital.getId()))
                 .thenReturn(Optional.of(membresiaAdmin));
+    }
+
+    @Test
+    void actualizaElNombreDeLaCuentaAutenticadaYConservaSusAccesos() {
+        when(membresias.findByUsuarioIdAndEstado(admin.getId(), EstadoMembresiaHospital.ACTIVA))
+                .thenReturn(List.of(membresiaAdmin));
+
+        var perfil = service.actualizarPerfil(admin.getId(),
+                new ActualizarPerfilStaffRequest(" Ana María ", " Pérez "));
+
+        assertEquals("Ana María", admin.getNombre());
+        assertEquals("Pérez", admin.getApellido());
+        assertEquals(admin.getNombre(), perfil.nombre());
+        assertEquals(admin.getApellido(), perfil.apellido());
+        assertEquals("admin@example.com", perfil.email());
+        assertEquals(RolSistema.USER, admin.getRol());
+        assertEquals(Set.of(RolMembresiaHospital.ADMIN_HOSPITAL), perfil.membresias().getFirst().roles());
     }
 
     @Test

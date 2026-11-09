@@ -244,7 +244,8 @@ class AdmisionRecepcionServiceTest {
     void rechazaCoberturaAjenaVencidaODeAdmisionFinalizada() {
         AdmisionRecepcion admision = admisionAbierta();
         Credencial credencial = new Credencial();
-        credencial.setFechaVencimiento(LocalDate.now(ZoneId.of("America/Argentina/Buenos_Aires")));
+        credencial.setFechaVencimiento(LocalDate.now(ZoneId.of("America/Argentina/Buenos_Aires"))
+                .withDayOfMonth(1).minusDays(1));
         when(repoAdmisionesRecepcion.findForUpdateByIdAndSesionRecepcionRecepcionistaUsuarioAuthId(7L, "auth"))
                 .thenReturn(Optional.of(admision));
         when(repoCredenciales.findByIdAndPacienteId(8L, 2L)).thenReturn(Optional.empty());
