@@ -21,6 +21,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
@@ -164,7 +165,8 @@ public class AdmisionRecepcionService {
             Long pacienteId = admision.getConsultaMedica().getPaciente().getId();
             Credencial credencial = repoCredenciales.findByIdAndPacienteId(credencialId, pacienteId)
                     .orElseThrow(() -> new RecursoNoEncontradoException("La credencial no está disponible para este paciente."));
-            if (credencial.getFechaVencimiento() == null || !credencial.getFechaVencimiento().isAfter(LocalDate.now(ZONA_ARGENTINA))) {
+            LocalDate vencimiento = credencial.getFechaVencimiento();
+            if (vencimiento == null || !YearMonth.from(vencimiento).atEndOfMonth().isAfter(LocalDate.now(ZONA_ARGENTINA))) {
                 throw new IllegalArgumentException("La fecha de vencimiento de la credencial debe ser posterior a hoy.");
             }
             nombreObraSocial = credencial.getObraSocial().getNombre();

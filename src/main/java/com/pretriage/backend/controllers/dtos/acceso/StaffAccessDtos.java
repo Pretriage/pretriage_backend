@@ -23,6 +23,14 @@ public final class StaffAccessDtos {
                                   boolean administradorPlataforma,
                                   List<MembresiaResponse> membresias) {}
 
+    public record ActualizarPerfilStaffRequest(
+            @NotBlank(message = "Ingresá tu nombre.")
+            @Size(max = 120, message = "El nombre debe tener hasta 120 caracteres.")
+            String nombre,
+            @NotBlank(message = "Ingresá tu apellido.")
+            @Size(max = 120, message = "El apellido debe tener hasta 120 caracteres.")
+            String apellido) {}
+
     public record MembresiaResponse(Long id, Long hospitalId, String hospitalNombre,
                                     EstadoMembresiaHospital estado,
                                     Set<RolMembresiaHospital> roles) {}
