@@ -6,6 +6,9 @@ import com.pretriage.backend.controllers.dtos.SesionMedicaActualDTO;
 import com.pretriage.backend.controllers.dtos.PretriajeConsultaDTO;
 import com.pretriage.backend.controllers.dtos.RevisionPrioridadRequest;
 import com.pretriage.backend.exceptions.ConflictoDeEstadoException;
+import com.pretriage.backend.model.acceso.EstadoMembresiaHospital;
+import com.pretriage.backend.model.acceso.MembresiaHospital;
+import com.pretriage.backend.model.acceso.RolMembresiaHospital;
 import com.pretriage.backend.model.consultas.*;
 import com.pretriage.backend.model.hospitales.EspecialidadMedica;
 import com.pretriage.backend.model.hospitales.Hospital;
@@ -34,6 +37,7 @@ import org.springframework.security.access.AccessDeniedException;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -44,6 +48,8 @@ class AtencionMedicoServiceTest {
         RepoMedico repoMedico;
         @Mock
         RepoHospitales repoHospitales;
+        @Mock
+        RepoMembresiasHospital repoMembresiasHospital;
         @Mock
         RepoEspecialidadesMedicas repoEspecialidadesMedicas;
         @Mock
@@ -80,6 +86,24 @@ class AtencionMedicoServiceTest {
         EstudioClinicoService estudioClinicoService;
 
         @Test
+        void noIniciaSesionSiMembresiaMedicaDelHospitalEstaRevocada() {
+                Medico medico = new Medico();
+                when(repoMedico.findByUsuarioAuthId("auth")).thenReturn(Optional.of(medico));
+                Hospital hospital = new Hospital(); hospital.setId(4L);
+                when(repoHospitales.findByIdForUpdate(4L)).thenReturn(Optional.of(hospital));
+                MembresiaHospital membresia = new MembresiaHospital();
+                membresia.setEstado(EstadoMembresiaHospital.REVOCADA);
+                membresia.setRoles(java.util.Set.of(RolMembresiaHospital.MEDICO));
+                when(repoMembresiasHospital.findByUsuarioIdAndHospitalId("auth", 4L))
+                        .thenReturn(Optional.of(membresia));
+
+                assertThrows(AccessDeniedException.class,
+                        () -> service.iniciarSesion("auth", 4L, "CLINICA", 6L, 7L));
+
+                verify(repoSesionesAtencionMedica, never()).save(any());
+        }
+
+        @Test
         void pretriajeParcialDevuelveEstadoYCadenaLiteralParaElMedicoDeLaAtencion() {
                 Medico medico = new Medico();
                 medico.setId(10L);
@@ -104,10 +128,10 @@ class AtencionMedicoServiceTest {
                 consulta.setNivelDeGravedadBot(NivelDeGravedad.NORMAL);
                 consulta.setChat(chat);
                 EntradaCola entrada = new EntradaCola();
-                entrada.setEstado(EstadoEntradaCola.EN_ATENCION);
+                entrada.setEstado(EstadoEntradaCola.EN_REVISION);
                 entrada.setConsultaMedica(consulta);
 
-                when(repoSesionesAtencionMedica.findByIdAndMedicoUsuarioAuthIdForUpdate(20L, "auth0"))
+                when(repoSesionesAtencionMedica.findByIdAndMedicoUsuarioAuthId(20L, "auth0"))
                                 .thenReturn(Optional.of(sesion));
                 when(repoEntradasCola.findByConsultaMedicaId(50L)).thenReturn(Optional.of(entrada));
 
@@ -245,7 +269,7 @@ class AtencionMedicoServiceTest {
                 when(repoEntradasCola
                                 .findFirstByConsultaMedicaMedicoUsuarioAuthIdAndEstadoInOrderByFechaHoraLlamadoDesc(
                                                 "auth0",
-                                                List.of(EstadoEntradaCola.LLAMADO, EstadoEntradaCola.EN_ATENCION)))
+                                                AtencionMedicoService.CONSULTAS_TOMADAS))
                                 .thenReturn(Optional.of(entrada));
 
                 SesionMedicaActualDTO resultado = service.obtenerSesionActual("auth0");
@@ -284,13 +308,79 @@ class AtencionMedicoServiceTest {
                                 .thenReturn(Optional.of(sesion));
                 when(repoEntradasCola
                                 .findFirstByConsultaMedicaMedicoUsuarioAuthIdAndEstadoInOrderByFechaHoraLlamadoDesc(
-                                                "auth0", List.of(EstadoEntradaCola.LLAMADO, EstadoEntradaCola.EN_ATENCION)))
+                                                "auth0", AtencionMedicoService.CONSULTAS_TOMADAS))
                                 .thenReturn(Optional.empty());
 
                 SesionMedicaActualDTO resultado = service.obtenerSesionActual("auth0");
 
                 assertEquals(60L, resultado.getSesion().getId());
                 assertNull(resultado.getConsultaActual());
+        }
+
+        @Test
+        void seleccionaSinLlamarYRevalidaElEstadoCuandoOtroMedicoTomaElPrimero() {
+                ContextoAtencion contexto = contextoAtencion();
+                SesionAtencionMedica sesion = contexto.sesion();
+                Hospital hospital = new Hospital();
+                hospital.setId(1L);
+                EspecialidadMedica especialidad = new EspecialidadMedica();
+                especialidad.setId(2L);
+                Sector sector = new Sector();
+                sector.setId(3L);
+                sesion.setHospital(hospital);
+                sesion.setEspecialidad(especialidad);
+                sesion.setSector(sector);
+                GestorDeCola gestor = new GestorDeCola();
+                gestor.setId(4L);
+                ConsultaMedica otraConsulta = new ConsultaMedica();
+                otraConsulta.setId(49L);
+                EntradaCola otraEntrada = new EntradaCola();
+                otraEntrada.setEstado(EstadoEntradaCola.EN_REVISION);
+                otraEntrada.setConsultaMedica(otraConsulta);
+                contexto.entrada().setEstado(EstadoEntradaCola.EN_COLA);
+                contexto.consulta().setEstadoConsulta(EstadoConsulta.EN_COLA);
+                contexto.consulta().setMedico(null);
+                contexto.consulta().setSala(null);
+                contexto.entrada().setOrdenRelativo(7L);
+                LocalDateTime ingreso = LocalDateTime.now().minusMinutes(5);
+                contexto.entrada().setFechaHoraIngreso(ingreso);
+                when(repoGestoresDeColas.findByHospitalIdAndEspecialidadIdAndSectorId(1L, 2L, 3L))
+                                .thenReturn(Optional.of(gestor));
+                when(repoEntradasCola.findIdsConsultaPorOrdenDeCola(eq(4L), eq(EstadoEntradaCola.EN_COLA), any()))
+                                .thenReturn(List.of(49L), List.of(50L));
+                when(repoConsultasMedicas.findByIdForUpdate(49L)).thenReturn(Optional.of(otraConsulta));
+                when(repoEntradasCola.findByConsultaMedicaId(49L)).thenReturn(Optional.of(otraEntrada));
+                ConsultaLlamadaDTO seleccion = service.seleccionarProximo("auth0", 20L);
+
+                assertEquals(50L, seleccion.getConsultaId());
+                assertEquals(EstadoConsulta.EN_REVISION, seleccion.getEstadoConsulta());
+                assertEquals(EstadoEntradaCola.EN_REVISION, contexto.entrada().getEstado());
+                assertNull(contexto.entrada().getFechaHoraLlamado());
+                assertEquals(EstadoEntradaCola.EN_REVISION, otraEntrada.getEstado());
+
+                ConsultaLlamadaDTO devuelta = service.devolverACola("auth0", 20L, 50L);
+
+                assertEquals(EstadoConsulta.EN_COLA, devuelta.getEstadoConsulta());
+                assertEquals(EstadoEntradaCola.EN_COLA, contexto.entrada().getEstado());
+                assertEquals(7L, contexto.entrada().getOrdenRelativo());
+                assertEquals(ingreso, contexto.entrada().getFechaHoraIngreso());
+                assertNull(contexto.consulta().getMedico());
+                assertNull(contexto.consulta().getSala());
+        }
+
+        @Test
+        void llamarConvierteLaReservaEnLlamadoUnaSolaVez() {
+                ContextoAtencion contexto = contextoAtencion();
+                contexto.entrada().setEstado(EstadoEntradaCola.EN_REVISION);
+                contexto.consulta().setEstadoConsulta(EstadoConsulta.EN_REVISION);
+                assertEquals(EstadoConsulta.LLAMADO, service.llamarConsulta("auth0", 20L, 50L).getEstadoConsulta());
+                assertEquals(EstadoEntradaCola.LLAMADO, contexto.entrada().getEstado());
+                LocalDateTime llamado = contexto.entrada().getFechaHoraLlamado();
+                assertNotNull(llamado);
+
+                service.llamarConsulta("auth0", 20L, 50L);
+
+                assertEquals(llamado, contexto.entrada().getFechaHoraLlamado());
         }
 
         @Test
@@ -318,6 +408,7 @@ class AtencionMedicoServiceTest {
                 when(repoSesionesAtencionMedica.findByIdAndMedicoUsuarioAuthIdForUpdate(20L, "auth0"))
                                 .thenReturn(Optional.of(sesion));
                 when(repoEntradasCola.findByConsultaMedicaId(50L)).thenReturn(Optional.of(entrada));
+                when(repoConsultasMedicas.findByIdForUpdate(50L)).thenReturn(Optional.of(consulta));
 
                 service.confirmarPresente("auth0", 20L, 50L);
 
@@ -433,15 +524,17 @@ class AtencionMedicoServiceTest {
                 when(repoSesionesAtencionMedica.findByIdAndMedicoUsuarioAuthIdForUpdate(20L, "auth0"))
                                 .thenReturn(Optional.of(sesion));
                 when(repoEntradasCola.findByConsultaMedicaId(50L)).thenReturn(Optional.of(entrada));
-                return new ContextoAtencion(consulta);
+                when(repoConsultasMedicas.findByIdForUpdate(50L)).thenReturn(Optional.of(consulta));
+                return new ContextoAtencion(consulta, entrada, sesion);
         }
 
-        private record ContextoAtencion(ConsultaMedica consulta) {
+        private record ContextoAtencion(ConsultaMedica consulta, EntradaCola entrada, SesionAtencionMedica sesion) {
         }
 
         @Test
         void obtenerHistorialClinicoRetornaListaDeEstudioClinicoDTO() {
-                Medico medico = mock(Medico.class);
+                Medico medico = new Medico();
+                medico.setId(10L);
                 Long pacienteId = 1L;
 
                 EstudioClinico estudioClinico1 = new EstudioClinico();
@@ -475,6 +568,8 @@ class AtencionMedicoServiceTest {
 
                 when(repoMedico.findByUsuarioAuthId("auth0")).thenReturn(Optional.of(medico));
 
+                when(repoAtencionesMedicas.existsByConsultaMedicaPacienteIdAndSesionAtencionMedicaMedicoId(
+                                pacienteId, medico.getId())).thenReturn(true);
                 List<EstudioClinicoDTO> resultado = service.obtenerHistorialClinico("auth0", pacienteId);
 
                 verify(repoMedico).findByUsuarioAuthId("auth0");
@@ -482,6 +577,19 @@ class AtencionMedicoServiceTest {
                 assertEquals(2, resultado.size());
                 assertEquals(estudio1.getNombreArchivo(), resultado.getFirst().getNombreArchivo());
                 assertEquals(estudio2.getNombreArchivo(), resultado.get(1).getNombreArchivo());
+        }
+
+        @Test
+        void historialClinicoRequiereUnaAtencionDelMedicoAlPaciente() {
+                Medico medico = new Medico();
+                medico.setId(10L);
+                when(repoMedico.findByUsuarioAuthId("auth0")).thenReturn(Optional.of(medico));
+
+                assertThrows(AccessDeniedException.class, () -> service.obtenerHistorialClinico("auth0", 99L));
+                assertThrows(AccessDeniedException.class, () -> service.obtenerEstudioClinico("auth0", 99L, 1L));
+                assertThrows(AccessDeniedException.class, () -> service.obtenerUltimosEstudiosClinicos("auth0", 99L, 5));
+                assertThrows(AccessDeniedException.class, () -> service.descargarArchivo("auth0", 99L, 1L));
+                verifyNoInteractions(pacienteService, repoEstudiosClinicos, estudioClinicoService);
         }
 
         @Test
@@ -504,6 +612,8 @@ class AtencionMedicoServiceTest {
                 e2.setPaciente(paciente);
 
                 when(repoMedico.findByUsuarioAuthId("auth0")).thenReturn(Optional.of(medico));
+                when(repoAtencionesMedicas.existsByConsultaMedicaPacienteIdAndSesionAtencionMedicaMedicoId(
+                                pacienteId, medico.getId())).thenReturn(true);
                 when(pacienteService.obtenerPaciente(pacienteId)).thenReturn(paciente);
                 when(repoEstudiosClinicos.findByPacienteIdAndActivoTrueOrderByFechaSubidaDesc(eq(pacienteId),
                                 any(Pageable.class)))
@@ -529,6 +639,8 @@ class AtencionMedicoServiceTest {
                 Paciente paciente = new Paciente();
                 paciente.setId(pacienteId);
                 when(repoMedico.findByUsuarioAuthId("auth0")).thenReturn(Optional.of(medico));
+                when(repoAtencionesMedicas.existsByConsultaMedicaPacienteIdAndSesionAtencionMedicaMedicoId(
+                                pacienteId, medico.getId())).thenReturn(true);
                 when(pacienteService.obtenerPaciente(pacienteId)).thenReturn(paciente);
                 when(repoEstudiosClinicos.findByPacienteIdAndActivoTrueOrderByFechaSubidaDesc(eq(pacienteId),
                                 any(Pageable.class)))
@@ -562,6 +674,8 @@ class AtencionMedicoServiceTest {
                                 any(Pageable.class)))
                                 .thenReturn(List.of());
 
+                when(repoAtencionesMedicas.existsByConsultaMedicaPacienteIdAndSesionAtencionMedicaMedicoId(
+                                pacienteId, medico.getId())).thenReturn(true);
                 service.obtenerUltimosEstudiosClinicos("auth0", pacienteId, 10);
 
                 org.mockito.ArgumentCaptor<Pageable> captor = org.mockito.ArgumentCaptor.forClass(Pageable.class);
@@ -577,6 +691,8 @@ class AtencionMedicoServiceTest {
                 medico.setId(10L);
                 when(repoMedico.findByUsuarioAuthId("auth0")).thenReturn(Optional.of(medico));
 
+                when(repoAtencionesMedicas.existsByConsultaMedicaPacienteIdAndSesionAtencionMedicaMedicoId(
+                                pacienteId, medico.getId())).thenReturn(true);
                 assertThrows(IllegalArgumentException.class,
                                 () -> service.obtenerUltimosEstudiosClinicos("auth0", pacienteId, 0));
                 assertThrows(IllegalArgumentException.class,

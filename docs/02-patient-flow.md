@@ -79,6 +79,13 @@ If delayed patient arrives (`POST /api/paciente/consulta/cola/reincorporar` from
 
 - They return to first place within their priority level (`obtenerOrdenParaPrimerLugarDePrioridad`: `min(ordenRelativo)-1` for that `prioridad`).
 
+## Revisión previa al llamado
+
+Cuando el médico selecciona la consulta, pasa a `EN_REVISION` y deja de tener
+posición y tiempo estimado de espera. La app muestra que el médico está
+revisando el caso. La indicación de acercarse aparece al pasar a `LLAMADO`.
+Si el médico devuelve la consulta, recupera su lugar en `EN_COLA`.
+
 ## Waiting Expiration
 
 Both manual waiting (`POST /api/paciente/consulta/cola/pausa-manual`) and absence-after-call / `ATRASADO` entries are automatically cancelled after their deadline in `EN_ESPERA`/`ATRASADO` (60m for `EN_ESPERA`, 30m windows for `ATRASADO` via `EsperaPacienteService.cancelarEsperasVencidas` / `cancelarAtrasadosSinRespuesta`):
@@ -95,7 +102,7 @@ From `EN_COLA`, `EN_ESPERA` (manual or `AUSENTE_AL_LLAMADO`) or `ATRASADO`:
 
 - `EntradaCola.estado = CANCELADA` (clears `tipoPausa`, `fechaHoraLimiteRespuesta`, `fechaHoraUltimaRepregunta`).
 - `ConsultaMedica.estadoConsulta = CANCELADA` (clears `medico` and `sala`).
-- The entry stops counting for estimation and is no longer offered to the doctor (`listarPacientesDisponibles`/`llamarProximo` only read `EN_COLA`; `obtenerSesionActual` only `LLAMADO`/`EN_ATENCION`), so a cancelled patient can never be called again within that selection.
+- The entry stops counting for estimation and is no longer offered to the doctor.
 - If the AI triage chat is still open, it is finalized (`Chat.finalizado = true`).
 
 Mobile clears its saved chat ID only after confirmed cancellation and after a successful
@@ -105,7 +112,31 @@ and messages remain in the backend.
 
 The endpoint always resolves the patient's **current** hospital selection: it operates on the most recent `EntradaCola` of the patient (`RepoEntradasCola.findFirstByConsultaMedicaPacienteIdOrderByIdDesc`). Older `EntradaCola` records from previous selections that are already `CANCELADA` or `FINALIZADA` are never considered, so a historical entry can neither shadow the active selection nor produce a spurious `409`/no-op response.
 
-It is **not** possible to cancel a consultation in `LLAMADO`, `EN_ATENCION` (in progress) or already `FINALIZADA` (409 `ConflictoDeEstadoException`). Cancellation is terminal: the selection cannot be resumed or re-linked. Reception admissions are out of scope for this endpoint (cancelled through `POST /api/recepcion/admisiones/{admisionId}/cancelar`, `docs/09-reception-admission.md`).
+Cancellation returns `409 ConflictoDeEstadoException` in `EN_REVISION`, `LLAMADO`,
+`EN_ATENCION`, and `FINALIZADA`. Cancellation is terminal. Reception admissions
+are cancelled through `POST /api/recepcion/admisiones/{admisionId}/cancelar`.
+
+## Suspensión de nuevas solicitudes digitales
+
+La suspensión alcanza únicamente las nuevas inscripciones remotas. Se calcula
+por DNI en todos los hospitales. Una discrepancia vigente suspende por seis
+meses, dos por un año y tres o más de forma permanente. El plazo empieza en la
+fecha de la discrepancia vigente más reciente y vence al alcanzar la fecha
+de fin. Una discrepancia puede seguir vigente como registro después del
+vencimiento de la sanción.
+
+La app consulta `GET /api/paciente/sancion` al ingresar y antes de seleccionar
+hospital. También actualiza el estado con la respuesta `403 PATIENT_SANCTIONED`
+de `POST /api/atencion/hospital`. El aviso de sanción aplicada o levantada
+se identifica de forma estable para mostrarlo una vez por instalación.
+
+Durante la suspensión están disponibles la admisión por recepción, la consulta
+en curso, el listado de hospitales y tiempos, el perfil y los estudios. La app
+mantiene las recomendaciones de urgencia del pretriage en curso y la opción de
+llamar al 107. Un chat anterior que llegue al cierre sin entrada conserva el
+resultado y la recomendación aunque no pueda abrir una inscripción remota.
+La anulación administrativa recalcula la sanción desde la
+discrepancia vigente más reciente y la app actualiza la disponibilidad.
 
 ## Medical Studies Management
 

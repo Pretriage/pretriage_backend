@@ -41,14 +41,15 @@ class HospitalConfigurationControllerTest {
     @Test
     void deshabilitaEspecialidadDelHospitalSinSectorYDevuelveConfiguracion() throws Exception {
         when(service.deshabilitarEspecialidad("admin", 7L, 4L))
-                .thenReturn(new ConfiguracionHospitalResponse(List.of(), List.of(), List.of()));
+                .thenReturn(new ConfiguracionHospitalResponse(List.of(), List.of(), List.of(), List.of()));
 
         mvc.perform(delete("/api/admin/hospitales/7/configuracion/especialidades/4")
                         .with(jwt().jwt(token -> token.subject("admin"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.especialidades").isArray())
                 .andExpect(jsonPath("$.salas").isArray())
-                .andExpect(jsonPath("$.sectores").isArray());
+                .andExpect(jsonPath("$.sectores").isArray())
+                .andExpect(jsonPath("$.salasOcupadasIds").isArray());
 
         verify(service).deshabilitarEspecialidad("admin", 7L, 4L);
     }

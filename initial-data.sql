@@ -23,11 +23,11 @@ VALUES ('Güemes Hospital', 'ChIJs-z8Lo_KvJURmzvvmNOCPBs', 1),
 ('Centro Médico ALASBA', 'ChIJq-lKLtLKvJUR9zlh-P8L_AM',6);
 
 /*asumo que ya están cargadas las especialidades médicas:
-1 == "CLINICA_MEDICA", "Clinica medica"
-2 == "PEDIATRIA", "Pediatria"
-3 == "CARDIOLOGIA", "Cardiologia"
-4 == "TRAUMATOLOGIA", "Traumatologia"
-5 == "GINECOLOGIA", "Ginecologia"*/
+1 == "CLINICA_MEDICA", "Clínica médica"
+2 == "PEDIATRIA", "Pediatría"
+3 == "CARDIOLOGIA", "Cardiología"
+4 == "TRAUMATOLOGIA", "Traumatología"
+5 == "GINECOLOGIA", "Ginecología"*/
 INSERT INTO  hospital_especialidad_medica (id_especialidad_medica, id_hospital)
 VALUES (1,1),(4,1),
 (1,2),(4,2),

@@ -10,6 +10,7 @@ import com.pretriage.backend.exceptions.ConflictoDeEstadoException;
 import com.pretriage.backend.exceptions.ChatNoEncontradoException;
 import com.pretriage.backend.exceptions.EntradaChatNoClinicaException;
 import com.pretriage.backend.exceptions.PacienteNoExisteException;
+import com.pretriage.backend.exceptions.PacienteSancionadoException;
 import com.pretriage.backend.exceptions.ProveedorIaException;
 import com.pretriage.backend.mappers.MapperChat;
 import com.pretriage.backend.mappers.MapperMensaje;
@@ -949,16 +950,23 @@ public class ChatService {
                     : bloquearConsulta(chat.getConsultaOrigenId()).orElseThrow(ChatFinalizadoException::new);
             if (origen != null && (origen.getEstadoConsulta() == EstadoConsulta.CANCELADA
                     || origen.getEstadoConsulta() == EstadoConsulta.FINALIZADA)) throw new ChatFinalizadoException();
-            if (origen != null && origen.getEstadoConsulta() == EstadoConsulta.EN_ATENCION) {
-                // A late AI result may enrich the record, never reinsert a patient already being seen.
+            if (origen != null && (origen.getEstadoConsulta() == EstadoConsulta.EN_REVISION
+                    || origen.getEstadoConsulta() == EstadoConsulta.LLAMADO
+                    || origen.getEstadoConsulta() == EstadoConsulta.EN_ATENCION)) {
+                // Un resultado tardío completa el caso sin quitar la asignación al médico.
                 origen.setChat(chat);
                 origen.setResumenPretriageJson(resultadoJson);
                 origen.setNivelDeGravedadBot(nivelDeGravedadDesdePrioridad(resultadoConPrioridad.nivelPrioridad()));
                 repoConsultasMedicas.save(origen);
             } else {
-                atencionEstimada = atencionHospitalService.finalizarTriageEIngresarACola(
-                        idPaciente, nivelDeGravedadDesdePrioridad(resultadoConPrioridad.nivelPrioridad()),
-                        resultadoJson, chat);
+                try {
+                    atencionEstimada = atencionHospitalService.finalizarTriageEIngresarACola(
+                            idPaciente, nivelDeGravedadDesdePrioridad(resultadoConPrioridad.nivelPrioridad()),
+                            resultadoJson, chat);
+                } catch (PacienteSancionadoException rechazo) {
+                    // Conserva la recomendación clínica aunque el chat legado no tenga ingreso remoto.
+                    mensajeBot.setContenido(contenidoRespuesta + " " + rechazo.getMessage());
+                }
             }
             chat.setEstadoClasificacion(EstadoClasificacionChat.COMPLETADA);
             limpiarRecuperacion(chat);

@@ -50,15 +50,19 @@ public class EsperaPacienteService {
     public EstadoConsultaPacienteDTO ausentarme(String auth0Id) {
         Paciente paciente = obtenerPaciente(auth0Id);
         EntradaCola entrada = obtenerEntradaActivaPaciente(paciente);
+        ConsultaMedica consulta = repoConsultasMedicas.findByIdForUpdate(entrada.getConsultaMedica().getId())
+                .orElseThrow(() -> new NoSuchElementException("La consulta ya no existe"));
+        entityManager.refresh(consulta);
+        entityManager.refresh(entrada);
         validarEstado(entrada, EstadoEntradaCola.EN_COLA);
 
         entrada.setEstado(EstadoEntradaCola.EN_ESPERA);
         entrada.setTipoPausa(TipoPausaCola.ESPERA_MANUAL);
         entrada.setFechaHoraSalidaTemporal(LocalDateTime.now());
         entrada.setFechaHoraLimiteRespuesta(LocalDateTime.now().plusMinutes(MINUTOS_MAXIMOS_EN_ESPERA));
-        entrada.getConsultaMedica().setEstadoConsulta(EstadoConsulta.EN_ESPERA);
+        consulta.setEstadoConsulta(EstadoConsulta.EN_ESPERA);
 
-        repoConsultasMedicas.save(entrada.getConsultaMedica());
+        repoConsultasMedicas.save(consulta);
         return mapear(repoEntradasCola.save(entrada));
     }
 
@@ -156,6 +160,9 @@ public class EsperaPacienteService {
         }
         if (entrada.getEstado() == EstadoEntradaCola.FINALIZADA) {
             throw new ConflictoDeEstadoException("La consulta ya finalizo y no se puede cancelar");
+        }
+        if (entrada.getEstado() == EstadoEntradaCola.EN_REVISION) {
+            throw new ConflictoDeEstadoException("El médico está revisando tu consulta");
         }
         if (entrada.getEstado() == EstadoEntradaCola.LLAMADO) {
             throw new ConflictoDeEstadoException("El médico te esta llamando, no se puede cancelar. Si quieres cancelarlo espera a que el médico te marque ausente en el sistema y podrás cancelarlo");
@@ -261,6 +268,7 @@ public class EsperaPacienteService {
         return repoEntradasCola.findFirstByConsultaMedicaPacienteIdAndEstadoInOrderByIdDesc(
                         paciente.getId(),
                         List.of(EstadoEntradaCola.EN_COLA,
+                                EstadoEntradaCola.EN_REVISION,
                                 EstadoEntradaCola.LLAMADO,
                                 EstadoEntradaCola.EN_ESPERA,
                                 EstadoEntradaCola.ATRASADO,

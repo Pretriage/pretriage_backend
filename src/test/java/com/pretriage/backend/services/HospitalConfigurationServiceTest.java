@@ -17,6 +17,7 @@ import com.pretriage.backend.model.personas.UsuarioAuth;
 import com.pretriage.backend.repositories.RepoAuditoriasHospital;
 import com.pretriage.backend.repositories.RepoConsultasMedicas;
 import com.pretriage.backend.repositories.RepoEspecialidadesMedicas;
+import com.pretriage.backend.repositories.RepoEntradasCola;
 import com.pretriage.backend.repositories.RepoGestoresDeColas;
 import com.pretriage.backend.repositories.RepoHospitales;
 import com.pretriage.backend.repositories.RepoSalas;
@@ -28,6 +29,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -52,6 +54,8 @@ class HospitalConfigurationServiceTest {
         @Mock
         RepoConsultasMedicas consultasMedicas;
         @Mock
+        RepoEntradasCola entradasCola;
+        @Mock
         RepoSesionesAtencionMedica sesionesAtencionMedica;
         @Mock
         RepoGestoresDeColas gestoresDeColas;
@@ -68,7 +72,7 @@ class HospitalConfigurationServiceTest {
         void setUp() {
                 service = new HospitalConfigurationService(staffAccessService, hospitales, especialidades, salas,
                                 sectores,
-                                consultasMedicas, sesionesAtencionMedica, gestoresDeColas, auditorias);
+                                consultasMedicas, entradasCola, sesionesAtencionMedica, gestoresDeColas, auditorias);
                 hospital = new Hospital();
                 hospital.setId(7L);
                 hospital.setNombre("Hospital Escuela");
@@ -87,7 +91,8 @@ class HospitalConfigurationServiceTest {
                 actor = new UsuarioAuth();
                 actor.setId("auth0|admin");
                 when(staffAccessService.exigirAdminHospital(actor.getId(), hospital.getId())).thenReturn(actor);
-                when(hospitales.findById(hospital.getId())).thenReturn(Optional.of(hospital));
+                lenient().when(hospitales.findById(hospital.getId())).thenReturn(Optional.of(hospital));
+                lenient().when(hospitales.findByIdForUpdate(hospital.getId())).thenReturn(Optional.of(hospital));
         }
 
         @Test
@@ -136,7 +141,7 @@ class HospitalConfigurationServiceTest {
                                 especialidad.getId())).thenReturn(false);
                 when(especialidades.findAll()).thenReturn(java.util.List.of(especialidad));
                 when(salas.findByHospitalIdOrderByNombreAsc(hospital.getId())).thenReturn(java.util.List.of());
-                when(sectores.findByHospitalIdOrderByNombreAsc(hospital.getId())).thenReturn(java.util.List.of());
+                when(sectores.findByHospitalIdAndArchivadoFalseOrderByNombreAsc(hospital.getId())).thenReturn(java.util.List.of());
 
                 var configuracion = service.deshabilitarEspecialidad(actor.getId(), hospital.getId(),
                                 especialidad.getId());
@@ -145,10 +150,10 @@ class HospitalConfigurationServiceTest {
                 verify(hospitales).save(hospital);
                 verify(auditorias).save(any());
                 verify(sectores, never()).findByIdAndHospitalId(any(), any());
-                verify(especialidades, never()).delete(any());
-                verify(salas, never()).delete(any());
+                verify(especialidades, never()).deleteAllByIdInBatch(any());
+                verify(salas, never()).deleteAllByIdInBatch(any());
                 verify(salas, never()).save(any());
-                verify(sectores, never()).delete(any());
+                verify(sectores, never()).deleteAllByIdInBatch(any());
                 verify(sectores, never()).save(any());
         }
 
@@ -374,7 +379,7 @@ class HospitalConfigurationServiceTest {
 
         @Test
         void creaUnSectorParaUnaEspecialidadHabilitada() {
-                when(sectores.existsByHospitalIdAndNombreIgnoreCase(hospital.getId(), "Sector Norte"))
+                when(sectores.existsByHospitalIdAndNombreIgnoreCaseAndArchivadoFalse(hospital.getId(), "Sector Norte"))
                                 .thenReturn(false);
                 when(sectores.save(any(Sector.class))).thenAnswer(invocation -> {
                         Sector sector = invocation.getArgument(0);
@@ -395,7 +400,7 @@ class HospitalConfigurationServiceTest {
 
         @Test
         void noCreaSectorSiNombreDuplicadoEnHospital() {
-                when(sectores.existsByHospitalIdAndNombreIgnoreCase(hospital.getId(), "Sector Norte")).thenReturn(true);
+                when(sectores.existsByHospitalIdAndNombreIgnoreCaseAndArchivadoFalse(hospital.getId(), "Sector Norte")).thenReturn(true);
 
                 ConflictoDeEstadoException error = assertThrows(ConflictoDeEstadoException.class,
                                 () -> service.crearSector(actor.getId(), hospital.getId(),
@@ -429,7 +434,7 @@ class HospitalConfigurationServiceTest {
                 sector.setEspecialidad(especialidad);
                 when(especialidades.findAll()).thenReturn(java.util.List.of(especialidad));
                 when(salas.findByHospitalIdOrderByNombreAsc(hospital.getId())).thenReturn(java.util.List.of());
-                when(sectores.findByHospitalIdOrderByNombreAsc(hospital.getId())).thenReturn(java.util.List.of(sector));
+                when(sectores.findByHospitalIdAndArchivadoFalseOrderByNombreAsc(hospital.getId())).thenReturn(java.util.List.of(sector));
 
                 var configuracion = service.obtener(actor.getId(), hospital.getId());
 
@@ -439,7 +444,7 @@ class HospitalConfigurationServiceTest {
 
         @Test
         void creaUnSectorConActivaTruePorDefecto() {
-                when(sectores.existsByHospitalIdAndNombreIgnoreCase(hospital.getId(), "Sector Nuevo"))
+                when(sectores.existsByHospitalIdAndNombreIgnoreCaseAndArchivadoFalse(hospital.getId(), "Sector Nuevo"))
                                 .thenReturn(false);
                 when(sectores.save(any(Sector.class))).thenAnswer(invocation -> {
                         Sector sector = invocation.getArgument(0);
@@ -462,7 +467,7 @@ class HospitalConfigurationServiceTest {
                 sector.setHospital(hospital);
                 sector.setEspecialidad(especialidad);
                 when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
-                when(sectores.existsByHospitalIdAndNombreIgnoreCaseAndIdNot(hospital.getId(), "Sector Nuevo", 22L))
+                when(sectores.existsByHospitalIdAndNombreIgnoreCaseAndIdNotAndArchivadoFalse(hospital.getId(), "Sector Nuevo", 22L))
                                 .thenReturn(false);
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of());
                 when(sectores.save(any(Sector.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -476,6 +481,18 @@ class HospitalConfigurationServiceTest {
         }
 
         @Test
+        void desactivaSectorCuandoSuEspecialidadYaNoEstaHabilitada() {
+                hospital.getEspecialidades().clear();
+                when(sectores.save(sector)).thenReturn(sector);
+
+                var response = service.actualizarSector(actor.getId(), hospital.getId(), sector.getId(),
+                                new ActualizarSectorRequest(sector.getNombre(), especialidad.getId(), false));
+
+                assertFalse(response.activa());
+                assertEquals(especialidad.getId(), response.especialidadId());
+        }
+
+        @Test
         void noActualizaSectorSiNombreDuplicado() {
                 Sector sector = new Sector();
                 sector.setId(22L);
@@ -483,7 +500,7 @@ class HospitalConfigurationServiceTest {
                 sector.setHospital(hospital);
                 sector.setEspecialidad(especialidad);
                 when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
-                when(sectores.existsByHospitalIdAndNombreIgnoreCaseAndIdNot(hospital.getId(), "Sector Duplicado", 22L))
+                when(sectores.existsByHospitalIdAndNombreIgnoreCaseAndIdNotAndArchivadoFalse(hospital.getId(), "Sector Duplicado", 22L))
                                 .thenReturn(true);
 
                 ConflictoDeEstadoException error = assertThrows(ConflictoDeEstadoException.class,
@@ -506,7 +523,7 @@ class HospitalConfigurationServiceTest {
                 sala.setId(100L);
                 sala.setNombre("Sala 1");
                 when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
-                when(sectores.existsByHospitalIdAndNombreIgnoreCaseAndIdNot(hospital.getId(), "Sector Nuevo", 22L))
+                when(sectores.existsByHospitalIdAndNombreIgnoreCaseAndIdNotAndArchivadoFalse(hospital.getId(), "Sector Nuevo", 22L))
                                 .thenReturn(false);
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of(sala));
                 when(consultasMedicas.existsBySalaIdInAndEstadoConsultaNotIn(anyCollection(), anyCollection()))
@@ -530,7 +547,7 @@ class HospitalConfigurationServiceTest {
                 sector.setEspecialidad(especialidad);
                 when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of());
-                when(sectores.existsByHospitalIdAndNombreIgnoreCaseAndIdNot(hospital.getId(), "Sector Norte", 22L))
+                when(sectores.existsByHospitalIdAndNombreIgnoreCaseAndIdNotAndArchivadoFalse(hospital.getId(), "Sector Norte", 22L))
                                 .thenReturn(false);
                 when(sesionesAtencionMedica.existsBySectorIdAndEstadoIn(eq(22L), anyCollection())).thenReturn(true);
 
@@ -570,12 +587,12 @@ class HospitalConfigurationServiceTest {
                 sector.setNombre("Sector Norte");
                 sector.setHospital(hospital);
                 sector.setEspecialidad(especialidad);
-                when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
+                when(sectores.findByIdAndHospitalIdForUpdate(22L, hospital.getId())).thenReturn(Optional.of(sector));
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of());
 
                 service.eliminarSector(actor.getId(), hospital.getId(), 22L);
 
-                verify(sectores).delete(sector);
+                verify(sectores).deleteAllByIdInBatch(List.of(sector.getId()));
                 verify(auditorias).save(any());
         }
 
@@ -593,14 +610,14 @@ class HospitalConfigurationServiceTest {
                 especialidadAnterior.setId(3L);
                 especialidadAnterior.setNombre("Especialidad anterior");
                 gestor.setEspecialidad(especialidadAnterior);
-                when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
+                when(sectores.findByIdAndHospitalIdForUpdate(22L, hospital.getId())).thenReturn(Optional.of(sector));
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of());
                 when(gestoresDeColas.findBySectorId(22L)).thenReturn(Optional.of(gestor));
 
                 service.eliminarSector(actor.getId(), hospital.getId(), 22L);
 
-                verify(gestoresDeColas).delete(gestor);
-                verify(sectores).delete(sector);
+                verify(gestoresDeColas).deleteAllByIdInBatch(List.of(gestor.getId()));
+                verify(sectores).deleteAllByIdInBatch(List.of(sector.getId()));
         }
 
         @Test
@@ -610,7 +627,7 @@ class HospitalConfigurationServiceTest {
                 sector.setNombre("Sector Norte");
                 sector.setHospital(hospital);
                 sector.setEspecialidad(especialidad);
-                when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
+                when(sectores.findByIdAndHospitalIdForUpdate(22L, hospital.getId())).thenReturn(Optional.of(sector));
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of());
                 when(consultasMedicas.existsBySectorIdAndEstadoConsultaNotIn(eq(22L), anyCollection())).thenReturn(true);
 
@@ -619,49 +636,49 @@ class HospitalConfigurationServiceTest {
 
                 assertEquals("No se puede modificar o eliminar un sector con pacientes pendientes o en atención",
                                 error.getMessage());
-                verify(sectores, never()).delete(any());
+                verify(sectores, never()).deleteAllByIdInBatch(any());
         }
 
         @Test
-        void noEliminaSectorConHistorialDeConsultasAunqueLaConsultaEsteFinalizada() {
+        void archivaSectorConHistorialDeConsultasAunqueLaConsultaEsteFinalizada() {
                 Sector sector = new Sector();
                 sector.setId(22L);
                 sector.setNombre("Sector Norte");
                 sector.setHospital(hospital);
                 sector.setEspecialidad(especialidad);
-                when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
+                when(sectores.findByIdAndHospitalIdForUpdate(22L, hospital.getId())).thenReturn(Optional.of(sector));
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of());
                 when(consultasMedicas.existsBySectorId(22L)).thenReturn(true);
 
-                ConflictoDeEstadoException error = assertThrows(ConflictoDeEstadoException.class,
-                                () -> service.eliminarSector(actor.getId(), hospital.getId(), 22L));
+                service.eliminarSector(actor.getId(), hospital.getId(), 22L);
 
-                assertEquals("El sector tiene consultas, sesiones o pacientes vinculados; desactivalo para conservar el historial",
-                                error.getMessage());
-                verify(sectores, never()).delete(any());
+                assertTrue(sector.isArchivado());
+                assertFalse(sector.isActiva());
+                verify(sectores).save(sector);
+                verify(sectores, never()).deleteAllByIdInBatch(any());
         }
 
         @Test
-        void noEliminaSectorConSesionFinalizadaEnSuHistorial() {
+        void archivaSectorConSesionFinalizadaEnSuHistorial() {
                 Sector sector = new Sector();
                 sector.setId(22L);
                 sector.setNombre("Sector Norte");
                 sector.setHospital(hospital);
                 sector.setEspecialidad(especialidad);
-                when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
+                when(sectores.findByIdAndHospitalIdForUpdate(22L, hospital.getId())).thenReturn(Optional.of(sector));
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of());
                 when(sesionesAtencionMedica.existsBySectorId(22L)).thenReturn(true);
 
-                ConflictoDeEstadoException error = assertThrows(ConflictoDeEstadoException.class,
-                                () -> service.eliminarSector(actor.getId(), hospital.getId(), 22L));
+                service.eliminarSector(actor.getId(), hospital.getId(), 22L);
 
-                assertEquals("El sector tiene consultas, sesiones o pacientes vinculados; desactivalo para conservar el historial",
-                                error.getMessage());
-                verify(sectores, never()).delete(any());
+                assertTrue(sector.isArchivado());
+                assertFalse(sector.isActiva());
+                verify(sectores).save(sector);
+                verify(sectores, never()).deleteAllByIdInBatch(any());
         }
 
         @Test
-        void noEliminaSectorConEntradasHistoricasEnSuGestor() {
+        void archivaSectorConEntradasHistoricasEnSuGestor() {
                 Sector sector = new Sector();
                 sector.setId(22L);
                 sector.setNombre("Sector Norte");
@@ -670,21 +687,46 @@ class HospitalConfigurationServiceTest {
                 GestorDeCola gestor = new GestorDeCola();
                 gestor.setId(33L);
                 gestor.getEntradas().add(new EntradaCola());
-                when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
+                when(sectores.findByIdAndHospitalIdForUpdate(22L, hospital.getId())).thenReturn(Optional.of(sector));
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of());
                 when(gestoresDeColas.findBySectorId(22L)).thenReturn(Optional.of(gestor));
+                when(entradasCola.existsByGestorDeColaId(33L)).thenReturn(true);
+
+                service.eliminarSector(actor.getId(), hospital.getId(), 22L);
+
+                assertTrue(sector.isArchivado());
+                assertFalse(sector.isActiva());
+                verify(sectores).save(sector);
+                verify(gestoresDeColas, never()).deleteAllByIdInBatch(any());
+                verify(sectores, never()).deleteAllByIdInBatch(any());
+        }
+
+        @Test
+        void noArchivaSectorConEntradasDeColaActivasEnGestorLegado() {
+                Sector sector = new Sector();
+                sector.setId(22L);
+                sector.setNombre("Sector Norte");
+                sector.setHospital(hospital);
+                sector.setEspecialidad(especialidad);
+                GestorDeCola gestor = new GestorDeCola();
+                gestor.setId(33L);
+                gestor.setSector(sector);
+                when(sectores.findByIdAndHospitalIdForUpdate(22L, hospital.getId())).thenReturn(Optional.of(sector));
+                when(salas.findBySectorId(22L)).thenReturn(java.util.List.of());
+                when(gestoresDeColas.findBySectorId(22L)).thenReturn(Optional.of(gestor));
+                when(entradasCola.existsByGestorDeColaIdAndEstadoNotIn(eq(33L), anyCollection())).thenReturn(true);
 
                 ConflictoDeEstadoException error = assertThrows(ConflictoDeEstadoException.class,
                                 () -> service.eliminarSector(actor.getId(), hospital.getId(), 22L));
 
-                assertEquals("El sector tiene actividad de cola asociada; desactivalo para conservar el historial",
-                                error.getMessage());
-                verify(gestoresDeColas, never()).delete(any());
-                verify(sectores, never()).delete(any());
+                assertEquals("El sector todavía tiene pacientes pendientes en la cola", error.getMessage());
+                assertFalse(sector.isArchivado());
+                verify(sectores, never()).save(any());
+                verify(sectores, never()).deleteAllByIdInBatch(any());
         }
 
         @Test
-        void noEliminaSectorConPacientesAsignadosAunqueNoHayaConsultasActivas() {
+        void archivaSectorConPacientesAsignadosSinConsultasActivas() {
                 Sector sector = new Sector();
                 sector.setId(22L);
                 sector.setNombre("Sector Norte");
@@ -692,15 +734,16 @@ class HospitalConfigurationServiceTest {
                 sector.setEspecialidad(especialidad);
                 Paciente paciente = new Paciente();
                 sector.setPacientesAsignados(java.util.List.of(paciente));
-                when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
+                when(sectores.findByIdAndHospitalIdForUpdate(22L, hospital.getId())).thenReturn(Optional.of(sector));
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of());
 
-                ConflictoDeEstadoException error = assertThrows(ConflictoDeEstadoException.class,
-                                () -> service.eliminarSector(actor.getId(), hospital.getId(), 22L));
+                service.eliminarSector(actor.getId(), hospital.getId(), 22L);
 
-                assertEquals("El sector tiene consultas, sesiones o pacientes vinculados; desactivalo para conservar el historial",
-                                error.getMessage());
-                verify(sectores, never()).delete(any());
+                assertTrue(sector.isArchivado());
+                assertFalse(sector.isActiva());
+                assertEquals(List.of(paciente), sector.getPacientesAsignados());
+                verify(sectores).save(sector);
+                verify(sectores, never()).deleteAllByIdInBatch(any());
         }
 
         @Test
@@ -714,7 +757,7 @@ class HospitalConfigurationServiceTest {
                 sala.setId(100L);
                 sala.setNombre("Sala 1");
                 sala.setSector(sector);
-                when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
+                when(sectores.findByIdAndHospitalIdForUpdate(22L, hospital.getId())).thenReturn(Optional.of(sector));
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of(sala));
                 when(consultasMedicas.existsBySalaIdInAndEstadoConsultaNotIn(anyCollection(), anyCollection()))
                                 .thenReturn(false);
@@ -723,8 +766,8 @@ class HospitalConfigurationServiceTest {
 
                 service.eliminarSector(actor.getId(), hospital.getId(), 22L);
 
-                verify(salas).delete(sala);
-                verify(sectores).delete(sector);
+                verify(salas).deleteAllByIdInBatch(List.of(sala.getId()));
+                verify(sectores).deleteAllByIdInBatch(List.of(sector.getId()));
         }
 
         @Test
@@ -736,7 +779,7 @@ class HospitalConfigurationServiceTest {
                 sector.setEspecialidad(especialidad);
                 Sala sala = new Sala();
                 sala.setId(100L);
-                when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
+                when(sectores.findByIdAndHospitalIdForUpdate(22L, hospital.getId())).thenReturn(Optional.of(sector));
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of(sala));
                 when(consultasMedicas.existsBySalaIdInAndEstadoConsultaNotIn(anyCollection(), anyCollection()))
                                 .thenReturn(true);
@@ -746,7 +789,7 @@ class HospitalConfigurationServiceTest {
 
                 assertEquals("No se puede modificar o eliminar un sector con pacientes pendientes o en atención",
                                 error.getMessage());
-                verify(sectores, never()).delete(any());
+                verify(sectores, never()).deleteAllByIdInBatch(any());
         }
 
         @Test
@@ -758,7 +801,7 @@ class HospitalConfigurationServiceTest {
                 sector.setEspecialidad(especialidad);
                 Sala sala = new Sala();
                 sala.setId(100L);
-                when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
+                when(sectores.findByIdAndHospitalIdForUpdate(22L, hospital.getId())).thenReturn(Optional.of(sector));
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of(sala));
                 when(consultasMedicas.existsBySalaIdInAndEstadoConsultaNotIn(anyCollection(), anyCollection()))
                                 .thenReturn(false);
@@ -770,7 +813,7 @@ class HospitalConfigurationServiceTest {
 
                 assertEquals("No se puede modificar o eliminar un sector con sesiones de atención activas o pausadas",
                                 error.getMessage());
-                verify(sectores, never()).delete(any());
+                verify(sectores, never()).deleteAllByIdInBatch(any());
         }
 
         @Test
@@ -780,7 +823,7 @@ class HospitalConfigurationServiceTest {
                 sector.setNombre("Sector Norte");
                 sector.setHospital(hospital);
                 sector.setEspecialidad(especialidad);
-                when(sectores.findByIdAndHospitalId(22L, hospital.getId())).thenReturn(Optional.of(sector));
+                when(sectores.findByIdAndHospitalIdForUpdate(22L, hospital.getId())).thenReturn(Optional.of(sector));
                 when(salas.findBySectorId(22L)).thenReturn(java.util.List.of());
                 when(sesionesAtencionMedica.existsBySectorIdAndEstadoIn(eq(22L), anyCollection())).thenReturn(true);
 
@@ -789,12 +832,12 @@ class HospitalConfigurationServiceTest {
 
                 assertEquals("No se puede modificar o eliminar un sector con sesiones de atención activas o pausadas",
                                 error.getMessage());
-                verify(sectores, never()).delete(any());
+                verify(sectores, never()).deleteAllByIdInBatch(any());
         }
 
         @Test
         void noEliminaSectorSiNoExiste() {
-                when(sectores.findByIdAndHospitalId(99L, hospital.getId())).thenReturn(Optional.empty());
+                when(sectores.findByIdAndHospitalIdForUpdate(99L, hospital.getId())).thenReturn(Optional.empty());
 
                 assertThrows(RecursoNoEncontradoException.class,
                                 () -> service.eliminarSector(actor.getId(), hospital.getId(), 99L));

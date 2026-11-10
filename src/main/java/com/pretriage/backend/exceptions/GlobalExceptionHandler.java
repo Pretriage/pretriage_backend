@@ -1,9 +1,11 @@
 package com.pretriage.backend.exceptions;
 
+import com.pretriage.backend.controllers.dtos.PacienteSancionadoResponse;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.NoSuchElementException;
 
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -63,6 +65,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<Map<String, String>> handleAccessDenied(RuntimeException e) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
+    }
+
+    @ExceptionHandler(PacienteSancionadoException.class)
+    public ResponseEntity<PacienteSancionadoResponse> handlePacienteSancionado(PacienteSancionadoException e) {
+        var sancion = e.getSancion();
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .cacheControl(CacheControl.noStore())
+                .body(new PacienteSancionadoResponse(e.getMessage(), "PATIENT_SANCTIONED", sancion.vigente(),
+                        sancion.permanente(), sancion.fechaFin(), sancion.avisoId(), sancion.tipoAviso()));
     }
 
     @ExceptionHandler(RecursoNoEncontradoException.class)

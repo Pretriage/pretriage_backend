@@ -22,7 +22,7 @@ public class SalaService {
 
     @Transactional(readOnly = true)
     public List<SectorDTO> obtenerSectores(Long hospitalId, String codigoEspecialidad) {
-        return repoSectores.findByHospitalIdAndEspecialidadCodigoAndActivaTrueOrderByNombreAsc(hospitalId,
+        return repoSectores.findByHospitalIdAndEspecialidadCodigoAndActivaTrueAndArchivadoFalseOrderByNombreAsc(hospitalId,
                 codigoEspecialidad).stream()
                 .map(sector -> new SectorDTO(sector.getId(), sector.getNombre()))
                 .toList();
@@ -37,13 +37,22 @@ public class SalaService {
     }
 
     public Sector obtenerSector(Long sectorId, Long hospitalId) {
-        return repoSectores.findByIdAndHospitalId(sectorId, hospitalId)
+        Sector sector = repoSectores.findByIdAndHospitalId(sectorId, hospitalId)
                 .orElseThrow(() -> new NoSuchElementException("Sector inexistente en el hospital indicado"));
+        if (!sector.isActiva() || sector.isArchivado()) {
+            throw new NoSuchElementException("Sector inexistente en el hospital indicado");
+        }
+        return sector;
     }
 
     public Sala obtenerSala(Long salaId, Long hospitalId) {
-        return repoSalas.findByIdAndHospitalId(salaId, hospitalId)
+        Sala sala = repoSalas.findByIdAndHospitalId(salaId, hospitalId)
                 .orElseThrow(() -> new NoSuchElementException("Sala inexistente en el hospital indicado"));
+        if (!sala.isActiva() || sala.getSector() == null || !sala.getSector().isActiva()
+                || sala.getSector().isArchivado()) {
+            throw new NoSuchElementException("Sala inexistente en el hospital indicado");
+        }
+        return sala;
     }
 
     private SalaDTO mapearSala(Sala sala) {

@@ -1,11 +1,13 @@
 package com.pretriage.backend.services;
 
 import com.pretriage.backend.controllers.dtos.EsperaNuevaConsultaCalculo;
+import com.pretriage.backend.controllers.dtos.EstadoSancionPacienteDTO;
 import com.pretriage.backend.controllers.dtos.HospitalCercanoDTO;
 import com.pretriage.backend.controllers.dtos.HospitalSeleccionadoResponse;
 import com.pretriage.backend.controllers.dtos.TiempoEstimadoAtencionResponse;
 import com.pretriage.backend.exceptions.AtencionEnCursoException;
 import com.pretriage.backend.exceptions.NoSePudoEstimarElHorarioDeAtencion;
+import com.pretriage.backend.exceptions.PacienteSancionadoException;
 import com.pretriage.backend.model.chat.Chat;
 import com.pretriage.backend.model.consultas.ConsultaMedica;
 import com.pretriage.backend.model.consultas.EstadoConsulta;
@@ -21,12 +23,15 @@ import com.pretriage.backend.repositories.RepoEntradasCola;
 import com.pretriage.backend.repositories.RepoEspecialidadesMedicas;
 import com.pretriage.backend.repositories.RepoGestoresDeColas;
 import com.pretriage.backend.repositories.RepoHospitales;
+import jakarta.persistence.EntityManager;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -60,9 +65,68 @@ public class AtencionHospitalServiceTest {
         private GooglePlacesService googlePlacesService;
         @Mock
         private AsignacionSectorService asignacionSectorService;
+        @Mock
+        private DiscrepanciaSintomasService discrepanciaSintomasService;
 
         @InjectMocks
         private AtencionHospitalService service;
+
+        @BeforeEach
+        void pacienteSinSancionPorDefecto() {
+                lenient().when(discrepanciaSintomasService.estadoParaIngresoDigital(any(Paciente.class)))
+                                .thenReturn(new EstadoSancionPacienteDTO(false, false, null, null, null));
+        }
+
+        @Test
+        void rechazaUnaNuevaSolicitudDigitalDuranteLaRestriccion() {
+                String auth0Id = "auth0|123";
+                Paciente paciente = crearPaciente(10L);
+                when(pacienteService.obtenerPacienteConUsuarioAuthId(auth0Id)).thenReturn(Optional.of(paciente));
+                var sancion = new EstadoSancionPacienteDTO(true, true, null, "sancion-1", null);
+                when(discrepanciaSintomasService.estadoParaIngresoDigital(paciente)).thenReturn(sancion);
+
+                var error = assertThrows(PacienteSancionadoException.class,
+                                () -> service.seleccionarHospital(auth0Id, "place_1", "PEDIATRIA"));
+                assertEquals(sancion, error.getSancion());
+                verifyNoInteractions(ingresoColaService);
+        }
+
+        @Test
+        void pretriageLegadoNoAbreUnaEntradaNuevaSiElPacienteEstaSancionado() {
+                String auth0Id = "auth0|123";
+                Paciente paciente = crearPaciente(10L);
+                ConsultaMedica consulta = crearConsultaPendiente(paciente);
+                consulta.setId(20L);
+                consulta.setEstadoConsulta(EstadoConsulta.HOSPITAL_SELECCIONADO);
+                when(pacienteService.obtenerPacienteConUsuarioAuthId(auth0Id)).thenReturn(Optional.of(paciente));
+                when(repoConsultasMedicas.findFirstByPacienteIdAndEstadoConsultaIn(eq(paciente.getId()), any()))
+                                .thenReturn(Optional.of(consulta));
+                when(discrepanciaSintomasService.estadoParaIngresoDigital(paciente))
+                                .thenReturn(new EstadoSancionPacienteDTO(true, true, null, "sancion-1", null));
+
+                assertThrows(PacienteSancionadoException.class,
+                                () -> service.finalizarTriageEIngresarACola(auth0Id, NivelDeGravedad.URGENTE, "{}"));
+                assertNull(consulta.getResumenPretriageJson());
+                verifyNoInteractions(ingresoColaService);
+        }
+
+        @Test
+        void pretriageEnUnaEntradaExistenteConservaSuPrioridadClinicaSinConsultarSanciones() {
+                String auth0Id = "auth0|123";
+                Paciente paciente = crearPaciente(10L);
+                ConsultaMedica consulta = crearConsultaPendiente(paciente);
+                consulta.setId(20L);
+                consulta.setEstadoConsulta(EstadoConsulta.EN_COLA);
+                when(pacienteService.obtenerPacienteConUsuarioAuthId(auth0Id)).thenReturn(Optional.of(paciente));
+                when(repoConsultasMedicas.findFirstByPacienteIdAndEstadoConsultaIn(eq(paciente.getId()), any()))
+                                .thenReturn(Optional.of(consulta));
+                when(repoEntradasCola.existsByConsultaMedicaId(20L)).thenReturn(true);
+
+                service.finalizarTriageEIngresarACola(auth0Id, NivelDeGravedad.RIESGO_VITAL_INMEDIATO, "{}");
+
+                verify(ingresoColaService).ingresar(consulta, NivelDeGravedad.RIESGO_VITAL_INMEDIATO);
+                verifyNoInteractions(discrepanciaSintomasService);
+        }
 
         @Test
         void sePuedeSeleccionarUnHospitalConEspecialidad() {
@@ -223,6 +287,7 @@ public class AtencionHospitalServiceTest {
                 ConsultaMedica consultaPaciente = crearConsultaPendiente(paciente);
                 consultaPaciente.setEstadoConsulta(EstadoConsulta.HOSPITAL_SELECCIONADO);
                 Chat chat = new Chat(paciente);
+                chat.setConsultaOrigenId(20L);
                 TiempoEstimadoAtencionResponse responseEsperada = new TiempoEstimadoAtencionResponse();
 
                 when(pacienteService.obtenerPacienteConUsuarioAuthId(auth0Id)).thenReturn(Optional.of(paciente));
@@ -237,6 +302,31 @@ public class AtencionHospitalServiceTest {
                 assertEquals("{\"nivelPrioridad\":3}", consultaPaciente.getResumenPretriageJson());
                 assertSame(responseEsperada, response);
                 verify(repoConsultasMedicas).save(consultaPaciente);
+        }
+
+        @Test
+        void chatLegadoCompletaElResumenSinReencolarUnaConsultaEnRevision() {
+                String auth0Id = "auth0|123";
+                Paciente paciente = crearPaciente(10L);
+                ConsultaMedica consulta = crearConsultaPendiente(paciente);
+                consulta.setId(20L);
+                consulta.setEstadoConsulta(EstadoConsulta.EN_REVISION);
+                Chat chat = new Chat(paciente);
+                EntityManager entityManager = mock(EntityManager.class);
+                ReflectionTestUtils.setField(service, "entityManager", entityManager);
+                when(pacienteService.obtenerPacienteConUsuarioAuthId(auth0Id)).thenReturn(Optional.of(paciente));
+                when(repoConsultasMedicas.findFirstByPacienteIdAndEstadoConsultaIn(eq(paciente.getId()), any()))
+                                .thenReturn(Optional.of(consulta));
+                when(repoConsultasMedicas.findByIdForUpdate(20L)).thenReturn(Optional.of(consulta));
+
+                assertNull(service.finalizarTriageEIngresarACola(auth0Id, NivelDeGravedad.URGENTE,
+                                "{\"nivelPrioridad\":3}", chat));
+
+                assertEquals(EstadoConsulta.EN_REVISION, consulta.getEstadoConsulta());
+                assertEquals(NivelDeGravedad.URGENTE, consulta.getNivelDeGravedadBot());
+                assertSame(chat, consulta.getChat());
+                verify(entityManager).refresh(consulta);
+                verifyNoInteractions(ingresoColaService);
         }
 
         @Test

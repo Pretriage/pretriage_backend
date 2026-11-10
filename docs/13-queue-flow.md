@@ -35,7 +35,7 @@ flowchart TD
 3. Flujo de cancelación voluntaria (`POST /api/paciente/consulta/cancelar`)
 ```mermaid
 flowchart TD
-    A["Selección de hospital activa (EN_COLA / LLAMADO / EN_ESPERA / ATRASADO)"] --> B{"¿Cancela la selección?"}
+    A["Selección de hospital activa (EN_COLA / EN_ESPERA / ATRASADO)"] --> B{"¿Cancela la selección?"}
 
     B -->|"No"| C["Continúa con la atención"]
     B -->|"Sí"| D["Confirmación (diálogo del cliente)"]
@@ -47,12 +47,17 @@ flowchart TD
     F --> I["Si el triage IA sigue abierto, se cierra"]
     F --> J["La selección no se puede retomar"]
 ```
-Note: `EN_ATENCION` (consultation in progress) and `FINALIZADA` cannot be cancelled (`409 ConflictoDeEstadoException`). Cancellation is idempotent: retrying against an entry already `CANCELADA` succeeds without changes. The endpoint always acts on the patient's most recent `EntradaCola` (the current selection) via `RepoEntradasCola.findFirstByConsultaMedicaPacienteIdOrderByIdDesc`, so historical `CANCELADA`/`FINALIZADA` entries from previous selections are ignored. Out of scope: reception admissions (cancelled via `POST /api/recepcion/admisiones/{admisionId}/cancelar`).
+Cancellation returns `409 ConflictoDeEstadoException` in `EN_REVISION`, `LLAMADO`, `EN_ATENCION`,
+and `FINALIZADA`. It is idempotent for an entry already `CANCELADA`. The endpoint
+acts on the patient's most recent `EntradaCola`. Reception admissions use
+`POST /api/recepcion/admisiones/{admisionId}/cancelar`.
 4. Flujo de llamado médico, ausencia y reencolamiento (`cola/atraso/confirmar` / `cola/atraso/renovar` / `cola/reincorporar`)
 ```mermaid
 flowchart TD
-    A["Paciente en espera"] --> B["Médico ejecuta llamarPróxima"]
-    B --> C["Estado del paciente: LLAMADO"]
+    A["Paciente en cola"] --> B["Médico selecciona el próximo caso"]
+    B --> R["EN_REVISION: pretriage y datos clínicos"]
+    R -->|Devuelve a la cola| A
+    R -->|Llama al paciente| C["Estado del paciente: LLAMADO"]
     C --> D{"¿Paciente atiende presencialmente?"}
 
     D -->|"Sí"| E["Atención médica"]
@@ -75,6 +80,6 @@ flowchart TD
     P --> Q["Cancelar turno"]
 
     L --> R["Paciente nuevamente en espera"]
-    R --> S["Médico puede ejecutar llamarPróxima nuevamente"]
+    R --> S["Médico puede seleccionar el siguiente caso"]
     S --> C
 ```

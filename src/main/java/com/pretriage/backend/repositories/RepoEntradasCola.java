@@ -3,9 +3,8 @@ package com.pretriage.backend.repositories;
 import com.pretriage.backend.model.consultas.EntradaCola;
 import com.pretriage.backend.model.consultas.EstadoEntradaCola;
 import com.pretriage.backend.model.consultas.TipoPausaCola;
-import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -20,13 +19,24 @@ public interface RepoEntradasCola extends JpaRepository<EntradaCola, Long> {
 
     Optional<EntradaCola> findByConsultaMedicaId(Long idConsultaMedica);
 
+    boolean existsByConsultaMedicaId(Long consultaId);
+
+    boolean existsByGestorDeColaId(Long gestorId);
+
+    boolean existsByGestorDeColaIdAndEstadoNotIn(Long gestorId, Collection<EstadoEntradaCola> estados);
+
     Optional<EntradaCola> findFirstByConsultaMedicaPacienteIdAndEstadoInOrderByIdDesc(
             Long idPaciente, Collection<EstadoEntradaCola> estados);
 
     Optional<EntradaCola> findFirstByConsultaMedicaPacienteIdOrderByIdDesc(Long idPaciente);
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    Optional<EntradaCola> findFirstByGestorDeColaIdAndEstadoOrderByPrioridadDescOrdenRelativoAsc(Long idGestorDeCola, EstadoEntradaCola estado);
+    @Query("""
+            select e.consultaMedica.id from EntradaCola e
+            where e.gestorDeCola.id = :gestorId and e.estado = :estado
+            order by e.prioridad desc, e.ordenRelativo asc, e.fechaHoraIngreso asc, e.id asc
+            """)
+    List<Long> findIdsConsultaPorOrdenDeCola(
+            @Param("gestorId") Long gestorId, @Param("estado") EstadoEntradaCola estado, Pageable pagina);
 
     Optional<EntradaCola> findFirstByGestorDeColaIdOrderByOrdenRelativoDesc(Long idGestorDeCola);
 

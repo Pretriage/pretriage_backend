@@ -39,6 +39,8 @@ class SalaServiceTest {
         Long sectorId = 5L;
         String codigoEspecialidad = "CLINICA_MEDICA";
         Sector sector = mock(Sector.class);
+        when(sector.isActiva()).thenReturn(true);
+        when(sector.isArchivado()).thenReturn(false);
         when(repoSectores.findByIdAndHospitalId(sectorId, hospitalId)).thenReturn(Optional.of(sector));
         Sala sala = mock(Sala.class);
         when(sala.getId()).thenReturn(7L);
@@ -68,7 +70,7 @@ class SalaServiceTest {
         Sector sector = mock(Sector.class);
         when(sector.getId()).thenReturn(5L);
         when(sector.getNombre()).thenReturn("Sector A");
-        when(repoSectores.findByHospitalIdAndEspecialidadCodigoAndActivaTrueOrderByNombreAsc(
+        when(repoSectores.findByHospitalIdAndEspecialidadCodigoAndActivaTrueAndArchivadoFalseOrderByNombreAsc(
                 hospitalId, codigoEspecialidad)).thenReturn(List.of(sector));
 
         List<SectorDTO> resultado = salaService.obtenerSectores(hospitalId, codigoEspecialidad);
@@ -81,6 +83,11 @@ class SalaServiceTest {
     @Test
     void obtieneLaSalaDentroDelHospitalIndicado() {
         Sala sala = mock(Sala.class);
+        Sector sector = mock(Sector.class);
+        when(sala.isActiva()).thenReturn(true);
+        when(sala.getSector()).thenReturn(sector);
+        when(sector.isActiva()).thenReturn(true);
+        when(sector.isArchivado()).thenReturn(false);
         when(repoSalas.findByIdAndHospitalId(7L, 1L)).thenReturn(Optional.of(sala));
 
         Sala resultado = salaService.obtenerSala(7L, 1L);

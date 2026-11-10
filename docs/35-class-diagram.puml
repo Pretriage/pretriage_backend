@@ -1,0 +1,433 @@
+@startuml 01-vista-general
+title Diagrama de clases — Vista general
+left to right direction
+hide circle
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #334155
+  FontColor #0F172A
+  HeaderBackgroundColor #E2E8F0
+}
+class Paciente
+class Chat
+class AdmisionRecepcion
+class SesionRecepcion
+class ConsultaMedica {
+  -estadoConsulta : EstadoConsulta
+  -nivelDeGravedadBot : NivelDeGravedad
+  -nivelDeGravedadMedico : NivelDeGravedad
+}
+class EntradaCola {
+  -estado : EstadoEntradaCola
+  -prioridad : int
+  -ordenRelativo : long
+}
+class GestorDeCola
+class Sector
+class Hospital
+class AtencionMedica
+class SesionAtencionMedica
+class Medico
+Paciente -- ConsultaMedica
+Paciente -- Chat
+Chat -- ConsultaMedica
+SesionRecepcion -- AdmisionRecepcion
+AdmisionRecepcion -- ConsultaMedica
+ConsultaMedica -- EntradaCola
+EntradaCola -- GestorDeCola
+GestorDeCola -- Sector
+Sector -- Hospital
+ConsultaMedica -- AtencionMedica
+AtencionMedica -- SesionAtencionMedica
+SesionAtencionMedica -- Medico
+@enduml
+
+@startuml 02-consultas-cola-atencion
+title Diagrama de clases — Consultas, cola y atención médica
+hide circle
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+!pragma layout elk
+skinparam minClassWidth 165
+skinparam packageStyle rectangle
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #334155
+  FontColor #0F172A
+  HeaderBackgroundColor #E2E8F0
+}
+class ConsultaMedica {
+  -id : Long
+  -fechaHoraCreacion : LocalDateTime
+  -codigoLlamado : String
+  -estadoConsulta : EstadoConsulta
+  -nivelDeGravedadBot : NivelDeGravedad
+  -nivelDeGravedadMedico : NivelDeGravedad
+  -resumenPretriageJson : String
+  +getCodigoSala() : String
+}
+class EntradaCola {
+  -id : Long
+  -estado : EstadoEntradaCola
+  -tipoPausa : TipoPausaCola
+  -prioridad : int
+  -ordenRelativo : long
+  -fechaHoraIngreso : LocalDateTime
+  -fechaHoraLlamado : LocalDateTime
+  -fechaHoraLimiteRespuesta : LocalDateTime
+}
+class GestorDeCola {
+  -id : Long
+  +obtenerPrioridad(nivel : NivelDeGravedad) : int
+}
+class AtencionMedica {
+  -id : Long
+  -estado : EstadoAtencionMedica
+  -fechaHoraInicio : LocalDateTime
+  -fechaHoraFin : LocalDateTime
+}
+class SesionAtencionMedica {
+  -id : Long
+  -estado : EstadoSesionMedica
+  -fechaHoraInicio : LocalDateTime
+  -fechaHoraPausa : LocalDateTime
+  -fechaHoraFin : LocalDateTime
+}
+class RevisionPrioridadConsulta {
+  -id : Long
+  -decision : DecisionRevisionPrioridad
+  -prioridadAnterior : NivelDeGravedad
+  -prioridadNueva : NivelDeGravedad
+  -motivo : String
+  -fechaHora : LocalDateTime
+}
+class Sintoma {
+  -id : Long
+  -nombre : String
+}
+class Paciente
+class Hospital {
+  -id : Long
+  -nombre : String
+}
+class EspecialidadMedica {
+  -id : Long
+  -codigo : String
+  -nombre : String
+}
+class Sala {
+  -id : Long
+  -nombre : String
+  -activa : boolean
+}
+class Sector {
+  -id : Long
+  -nombre : String
+  -activa : boolean
+}
+class Medico {
+  -id : Long
+  -matricula : String
+}
+ConsultaMedica "0..*" --> "0..1" Paciente : paciente
+ConsultaMedica "0..*" --> "0..1" Hospital : hospital
+ConsultaMedica "0..*" --> "0..1" EspecialidadMedica : especialidad
+ConsultaMedica "0..*" --> "0..1" Medico : medico
+ConsultaMedica "0..*" --> "0..1" Sala : sala
+ConsultaMedica "0..*" --> "0..1" Sector : sector
+ConsultaMedica "0..1" --> "0..*" Sintoma : sintomasBot
+EntradaCola "0..1" --> "0..1" ConsultaMedica : consultaMedica
+GestorDeCola "0..1" -- "0..*" EntradaCola : entradas
+GestorDeCola "0..1" --> "0..*" ConsultaMedica : consultasEnEspera
+GestorDeCola "0..*" --> "0..1" Hospital : hospital
+GestorDeCola "0..*" --> "0..1" EspecialidadMedica : especialidad
+GestorDeCola "0..1" --> "0..1" Sector : sector
+AtencionMedica "0..1" --> "1" ConsultaMedica : consultaMedica
+AtencionMedica "0..*" --> "1" SesionAtencionMedica : sesionAtencionMedica
+SesionAtencionMedica "0..*" --> "0..1" Medico : medico
+SesionAtencionMedica "0..*" --> "0..1" Hospital : hospital
+SesionAtencionMedica "0..*" --> "0..1" EspecialidadMedica : especialidad
+SesionAtencionMedica "0..*" --> "0..1" Sala : sala
+SesionAtencionMedica "0..*" --> "0..1" Sector : sector
+RevisionPrioridadConsulta "0..*" --> "1" ConsultaMedica : consultaMedica
+RevisionPrioridadConsulta "0..*" --> "1" Medico : medico
+@enduml
+
+@startuml 03-pretriage-y-recepcion
+title Diagrama de clases — Pretriage digital y admisión por recepción
+left to right direction
+hide circle
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam linetype polyline
+skinparam nodesep 45
+skinparam ranksep 65
+skinparam packageStyle rectangle
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #334155
+  FontColor #0F172A
+  HeaderBackgroundColor #E2E8F0
+}
+class Chat {
+  -id : Long
+  -fechaHoraCreacion : LocalDateTime
+  -finalizado : boolean
+  -resultadoTriageJson : String
+  -estadoClasificacion : EstadoClasificacionChat
+  -estadoTurnoTexto : EstadoTurnoTexto
+  -estadoRecuperacion : EstadoRecuperacionChat
+  -proximoReintentoEn : LocalDateTime
+  -consultaOrigenId : Long
+  +agregarMensaje(mensaje : Mensaje) : void
+}
+class Mensaje {
+  -id : Long
+  -contenido : String
+  -autor : AutorMensaje
+  -fechaHoraEnvio : LocalDateTime
+  -solicitudId : String
+  -excluidoDelTriage : Boolean
+}
+class AdmisionRecepcion {
+  -id : Long
+  -estado : EstadoAdmisionRecepcion
+  -formularioJson : String
+  -resultadoTriageJson : String
+  -fechaHoraInicio : LocalDateTime
+  -fechaHoraFinalizacion : LocalDateTime
+  -fechaHoraCancelacion : LocalDateTime
+}
+class SesionRecepcion {
+  -id : Long
+  -estado : EstadoSesionRecepcion
+  -fechaHoraInicio : LocalDateTime
+  -fechaHoraFin : LocalDateTime
+}
+class Paciente
+class ConsultaMedica
+class Recepcionista
+class Hospital
+ConsultaMedica "0..1" --> "0..1" Chat : chat
+Chat "0..*" --> "0..1" Paciente : paciente
+Chat "0..1" *-- "0..*" Mensaje : mensajes
+Mensaje "0..*" --> "0..1" Paciente : pacienteAutor
+AdmisionRecepcion "0..1" --> "1" ConsultaMedica : consultaMedica
+AdmisionRecepcion "0..*" --> "1" SesionRecepcion : sesionRecepcion
+SesionRecepcion "0..*" --> "1" Recepcionista : recepcionista
+SesionRecepcion "0..*" --> "1" Hospital : hospital
+@enduml
+
+@startuml 04-hospitales-y-cobertura
+title Diagrama de clases — Hospitales, pacientes y cobertura
+left to right direction
+hide circle
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam linetype polyline
+skinparam nodesep 45
+skinparam ranksep 65
+skinparam packageStyle rectangle
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #334155
+  FontColor #0F172A
+  HeaderBackgroundColor #E2E8F0
+}
+class Hospital {
+  -id : Long
+  -placeId : String
+  -nombre : String
+}
+class EspecialidadMedica {
+  -id : Long
+  -codigo : String
+  -nombre : String
+}
+class Sector {
+  -id : Long
+  -nombre : String
+  -activa : boolean
+}
+class Sala {
+  -id : Long
+  -nombre : String
+  -activa : boolean
+}
+class Paciente {
+  -id : Long
+  -nombre : String
+  -apellido : String
+  -tipoDocumento : TipoDocumento
+  -numeroDocumento : String
+  -origenRegistro : OrigenRegistroPaciente
+  -fechaNacimiento : LocalDate
+  -telefono : String
+  -correoElectronico : String
+  +agregarEstudioClinico(estudio : EstudioClinico) : void
+}
+class Direccion {
+  -id : Long
+  -calle : String
+  -altura : String
+  -piso : String
+  -codigoPostal : String
+  -ciudad : String
+  -provincia : String
+  +formateada() : String
+}
+class Coordenada {
+  -id : Long
+  -latitud : Double
+  -longitud : Double
+}
+class Credencial {
+  -id : Long
+  -numeroAfiliado : String
+  -plan : String
+  -fechaVencimiento : LocalDate
+}
+class ObraSocial {
+  -id : Long
+  -nombre : String
+  -virgente : boolean
+}
+class EstudioClinico {
+  -id : Long
+  -nombreArchivo : String
+  -descripcion : String
+  -fechaSubida : LocalDateTime
+  -tamanoArchivo : Long
+  -rutaArchivo : String
+  -activo : boolean
+}
+Hospital "0..*" --> "0..*" EspecialidadMedica : especialidades
+Sector "0..*" --> "0..1" Hospital : hospital
+Sector "0..*" --> "0..1" EspecialidadMedica : especialidad
+Sector "0..1" -- "0..*" Sala : salas
+Hospital "0..1" -- "0..*" Sala : salas
+Sala "0..*" --> "0..1" EspecialidadMedica : especialidad
+Sector "0..1" --> "0..*" Paciente : pacientesAsignados
+Hospital "0..1" --> "0..1" Direccion : direccion
+Paciente "0..1" --> "0..1" Direccion : direccion
+Paciente "0..1" --> "0..1" Coordenada : coordenadaActual
+Direccion "0..1" --> "0..1" Coordenada : coordenada
+Paciente "0..1" -- "0..*" Credencial : credenciales
+ObraSocial "0..1" -- "0..*" Credencial : credenciales
+Paciente "0..1" -- "0..*" EstudioClinico : historialClinico
+@enduml
+
+@startuml 05-identidad-y-acceso
+title Diagrama de clases — Identidad y acceso hospitalario
+left to right direction
+hide circle
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam linetype polyline
+skinparam nodesep 45
+skinparam ranksep 65
+skinparam packageStyle rectangle
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #334155
+  FontColor #0F172A
+  HeaderBackgroundColor #E2E8F0
+}
+class UsuarioAuth {
+  -id : String
+  -nombre : String
+  -apellido : String
+  -numeroDocumento : String
+  -tipoDocumento : TipoDocumento
+  -correoElectronico : String
+  -rol : RolSistema
+}
+class Paciente
+class Medico {
+  -id : Long
+  -matricula : String
+}
+class Recepcionista {
+  -id : Long
+}
+class Hospital {
+  -id : Long
+  -nombre : String
+  -placeId : String
+}
+class EspecialidadMedica
+class MembresiaHospital {
+  -id : Long
+  -estado : EstadoMembresiaHospital
+  -roles : Set<RolMembresiaHospital>
+  -fechaAceptacion : Instant
+  -fechaSuspension : Instant
+}
+class InvitacionHospital {
+  -id : Long
+  -emailNormalizado : String
+  -estado : EstadoInvitacionHospital
+  -rolesSolicitados : Set<RolMembresiaHospital>
+  -especialidadIds : Set<Long>
+  -venceEn : Instant
+  -fechaAceptacion : Instant
+}
+class AuditoriaHospital {
+  -id : Long
+  -fecha : Instant
+  -accion : String
+  -objetivo : String
+  -resultado : String
+}
+class AsignacionMedicoHospital {
+  -id : Long
+}
+class CredencialProfesional {
+  -id : Long
+  -numero : String
+  -tipo : TipoMatriculaProfesional
+  -jurisdiccion : String
+  -estado : EstadoCredencialProfesional
+}
+abstract class RegistroCambioContrasenia {
+  -id : Long
+  -fechaHoraCreacion : LocalDateTime
+}
+class CambioContraseniaToken {
+  -token : String
+  -fechaHoraExpiracion : LocalDateTime
+  -estado : EstadoCambioContrasenia
+  +expiro() : boolean
+  +esPendienteValido() : boolean
+}
+class BloqueoCambioContrasenia {
+  -intentosFallidos : int
+  -bloqueadoHasta : LocalDateTime
+  +estaBloqueado(ahora : LocalDateTime) : boolean
+  +minutosRestantes(ahora : LocalDateTime) : long
+}
+Paciente "0..1" --> "0..1" UsuarioAuth : usuarioAuth
+Medico "0..1" --> "0..1" UsuarioAuth : usuarioAuth
+Recepcionista "0..1" --> "0..1" UsuarioAuth : usuarioAuth
+Hospital "0..1" --> "0..*" Recepcionista : recepcionistas
+MembresiaHospital "0..*" --> "1" Hospital : hospital
+MembresiaHospital "0..*" --> "1" UsuarioAuth : usuario
+MembresiaHospital "0..*" --> "0..1" UsuarioAuth : creadaPor
+InvitacionHospital "0..*" --> "1" Hospital : hospital
+InvitacionHospital "0..*" --> "1" UsuarioAuth : invitadaPor
+InvitacionHospital "0..*" --> "0..1" UsuarioAuth : aceptadaPor
+AuditoriaHospital "0..*" --> "1" Hospital : hospital
+AuditoriaHospital "0..*" --> "1" UsuarioAuth : actor
+Medico "0..1" -- "0..*" AsignacionMedicoHospital : asignaciones
+AsignacionMedicoHospital "0..*" --> "0..1" Hospital : hospital
+AsignacionMedicoHospital "0..*" --> "0..1" EspecialidadMedica : especialidad
+Medico "1" -- "0..*" CredencialProfesional : credencialesProfesionales
+RegistroCambioContrasenia <|-- CambioContraseniaToken
+RegistroCambioContrasenia <|-- BloqueoCambioContrasenia
+CambioContraseniaToken "0..*" -- "1" UsuarioAuth : usuario
+BloqueoCambioContrasenia "0..1" --> "1" UsuarioAuth : usuario
+@enduml
