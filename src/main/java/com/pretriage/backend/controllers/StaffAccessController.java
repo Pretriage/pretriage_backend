@@ -1,6 +1,7 @@
 package com.pretriage.backend.controllers;
 
 import com.pretriage.backend.controllers.dtos.acceso.StaffAccessDtos.*;
+import com.pretriage.backend.model.acceso.RolMembresiaHospital;
 import com.pretriage.backend.services.StaffAccessService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -66,6 +67,14 @@ public class StaffAccessController {
                                               @PathVariable("hospitalId") Long hospitalId, @PathVariable("membresiaId") Long membresiaId,
                                               @Valid @RequestBody ActualizarRolesRequest request) {
         return service.actualizarRoles(jwt.getSubject(), hospitalId, membresiaId, request);
+    }
+
+    @PatchMapping("/admin/hospitales/{hospitalId}/membresias/{membresiaId}/roles/{rol}")
+    public MembresiaResponse actualizarEstadoRol(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable("hospitalId") Long hospitalId, @PathVariable("membresiaId") Long membresiaId,
+            @PathVariable("rol") RolMembresiaHospital rol,
+            @Valid @RequestBody ActualizarEstadoRolRequest request) {
+        return service.actualizarEstadoRol(jwt.getSubject(), hospitalId, membresiaId, rol, request);
     }
 
     @GetMapping("/admin/hospitales/{hospitalId}/auditoria")

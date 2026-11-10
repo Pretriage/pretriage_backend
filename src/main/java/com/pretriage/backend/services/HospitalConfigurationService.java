@@ -4,7 +4,9 @@ import com.pretriage.backend.controllers.dtos.acceso.HospitalConfigurationDtos.*
 import com.pretriage.backend.exceptions.ConflictoDeEstadoException;
 import com.pretriage.backend.exceptions.RecursoNoEncontradoException;
 import com.pretriage.backend.model.acceso.AuditoriaHospital;
+import com.pretriage.backend.model.consultas.ConsultaMedica;
 import com.pretriage.backend.model.consultas.EstadoConsulta;
+import com.pretriage.backend.model.consultas.EstadoEntradaCola;
 import com.pretriage.backend.model.consultas.EstadoSesionMedica;
 import com.pretriage.backend.model.consultas.GestorDeCola;
 import com.pretriage.backend.model.hospitales.EspecialidadMedica;
@@ -14,6 +16,7 @@ import com.pretriage.backend.model.hospitales.Sector;
 import com.pretriage.backend.model.personas.UsuarioAuth;
 import com.pretriage.backend.repositories.RepoAuditoriasHospital;
 import com.pretriage.backend.repositories.RepoConsultasMedicas;
+import com.pretriage.backend.repositories.RepoEntradasCola;
 import com.pretriage.backend.repositories.RepoEspecialidadesMedicas;
 import com.pretriage.backend.repositories.RepoGestoresDeColas;
 import com.pretriage.backend.repositories.RepoHospitales;
@@ -21,6 +24,7 @@ import com.pretriage.backend.repositories.RepoSalas;
 import com.pretriage.backend.repositories.RepoSectores;
 import com.pretriage.backend.repositories.RepoSesionesAtencionMedica;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,17 +37,25 @@ import java.util.Set;
 @Service
 @RequiredArgsConstructor
 public class HospitalConfigurationService {
+    private static final List<EstadoSesionMedica> SESIONES_QUE_RESERVAN_SALA =
+            List.of(EstadoSesionMedica.ACTIVA, EstadoSesionMedica.PAUSADA);
+    private static final List<EstadoConsulta> CONSULTAS_TERMINALES =
+            List.of(EstadoConsulta.FINALIZADA, EstadoConsulta.CANCELADA);
+    private static final List<EstadoEntradaCola> ENTRADAS_TERMINALES =
+            List.of(EstadoEntradaCola.FINALIZADA, EstadoEntradaCola.CANCELADA);
+
     private final StaffAccessService staffAccessService;
     private final RepoHospitales hospitales;
     private final RepoEspecialidadesMedicas especialidades;
     private final RepoSalas salas;
     private final RepoSectores sectores;
     private final RepoConsultasMedicas consultasMedicas;
+    private final RepoEntradasCola entradasCola;
     private final RepoSesionesAtencionMedica sesionesAtencionMedica;
     private final RepoGestoresDeColas gestoresDeColas;
     private final RepoAuditoriasHospital auditorias;
 
-    @Transactional(readOnly = true)
+    @Transactional
     public ConfiguracionHospitalResponse obtener(String subject, Long hospitalId) {
         staffAccessService.exigirAdminHospital(subject, hospitalId);
         Hospital hospital = hospital(hospitalId);
@@ -55,12 +67,16 @@ public class HospitalConfigurationService {
                         habilitadas.contains(item.getId())))
                 .toList();
         List<SalaHospitalResponse> salasHospital = salas.findByHospitalIdOrderByNombreAsc(hospitalId).stream()
+                .filter(sala -> sala.getSector() == null || !sala.getSector().isArchivado())
                 .map(this::aSalaResponse)
                 .toList();
-        List<SectorHospitalResponse> sectoresHospital = sectores.findByHospitalIdOrderByNombreAsc(hospitalId).stream()
+        List<SectorHospitalResponse> sectoresHospital = sectores
+                .findByHospitalIdAndArchivadoFalseOrderByNombreAsc(hospitalId).stream()
                 .map(this::aSectorResponse)
                 .toList();
-        return new ConfiguracionHospitalResponse(catalogo, salasHospital, sectoresHospital);
+        List<Long> salasOcupadas = sesionesAtencionMedica.findSalasOcupadasIds(hospitalId,
+                SESIONES_QUE_RESERVAN_SALA);
+        return new ConfiguracionHospitalResponse(catalogo, salasHospital, sectoresHospital, salasOcupadas);
     }
 
     @Transactional
@@ -106,7 +122,7 @@ public class HospitalConfigurationService {
     @Transactional
     public SalaHospitalResponse crearSala(String subject, Long hospitalId, Long sectorId, GuardarSalaRequest request) {
         UsuarioAuth actor = staffAccessService.exigirAdminHospital(subject, hospitalId);
-        Hospital hospital = hospital(hospitalId);
+        Hospital hospital = bloquearHospital(hospitalId);
         EspecialidadMedica especialidad = especialidadHabilitada(hospital, request.especialidadId());
         Sector sector = sector(hospitalId, sectorId);
         validarEspecialidadDelSector(sector, request.especialidadId());
@@ -129,7 +145,7 @@ public class HospitalConfigurationService {
     public SalaHospitalResponse actualizarSala(String subject, Long hospitalId, Long sectorId, Long salaId,
             GuardarSalaRequest request) {
         UsuarioAuth actor = staffAccessService.exigirAdminHospital(subject, hospitalId);
-        Hospital hospital = hospital(hospitalId);
+        Hospital hospital = bloquearHospital(hospitalId);
         Sala sala = sala(hospitalId, salaId);
         Sector sector = sector(hospitalId, sectorId);
         validarSalaEnSector(sala, sector);
@@ -151,7 +167,7 @@ public class HospitalConfigurationService {
     public SalaHospitalResponse actualizarEstadoSala(String subject, Long hospitalId, Long sectorId, Long salaId,
             ActualizarEstadoSalaRequest request) {
         UsuarioAuth actor = staffAccessService.exigirAdminHospital(subject, hospitalId);
-        Hospital hospital = hospital(hospitalId);
+        Hospital hospital = bloquearHospital(hospitalId);
         Sala sala = sala(hospitalId, salaId);
         Sector sector = sector(hospitalId, sectorId);
         validarSalaEnSector(sala, sector);
@@ -169,10 +185,10 @@ public class HospitalConfigurationService {
     @Transactional
     public SectorHospitalResponse crearSector(String subject, Long hospitalId, GuardarSectorRequest request) {
         UsuarioAuth actor = staffAccessService.exigirAdminHospital(subject, hospitalId);
-        Hospital hospital = hospital(hospitalId);
+        Hospital hospital = bloquearHospital(hospitalId);
         EspecialidadMedica especialidad = especialidadHabilitada(hospital, request.especialidadId());
         String nombre = request.nombre().trim();
-        if (sectores.existsByHospitalIdAndNombreIgnoreCase(hospitalId, nombre)) {
+        if (sectores.existsByHospitalIdAndNombreIgnoreCaseAndArchivadoFalse(hospitalId, nombre)) {
             throw new ConflictoDeEstadoException("Ya existe un sector con ese nombre en el hospital");
         }
         Sector sector = new Sector();
@@ -190,18 +206,21 @@ public class HospitalConfigurationService {
     public SectorHospitalResponse actualizarSector(String subject, Long hospitalId, Long sectorId,
             ActualizarSectorRequest request) {
         UsuarioAuth actor = staffAccessService.exigirAdminHospital(subject, hospitalId);
-        Hospital hospital = hospital(hospitalId);
+        Hospital hospital = bloquearHospital(hospitalId);
         Sector sector = sector(hospitalId, sectorId);
-        EspecialidadMedica especialidad = especialidadHabilitada(hospital, request.especialidadId());
+        EspecialidadMedica especialidad = sector.getEspecialidad();
+        if (request.activa() || especialidad == null || !especialidad.getId().equals(request.especialidadId())) {
+            especialidad = especialidadHabilitada(hospital, request.especialidadId());
+        }
         String nombre = request.nombre().trim();
-        if (sectores.existsByHospitalIdAndNombreIgnoreCaseAndIdNot(hospitalId, nombre, sectorId)) {
+        if (sectores.existsByHospitalIdAndNombreIgnoreCaseAndIdNotAndArchivadoFalse(hospitalId, nombre, sectorId)) {
             throw new ConflictoDeEstadoException("Ya existe un sector con ese nombre en el hospital");
         }
         validarSectorSinPacientes(sectorId);
 
         if (!request.activa()) {
             validarSectorSinSesionesActivas(sectorId);
-            desactivarSalasDeSector(sector, actor);
+            desactivarSalasDeSector(sector, actor, salas.findBySectorId(sectorId));
         }
 
         sector.setNombre(nombre);
@@ -216,39 +235,65 @@ public class HospitalConfigurationService {
     @Transactional
     public void eliminarSector(String subject, Long hospitalId, Long sectorId) {
         UsuarioAuth actor = staffAccessService.exigirAdminHospital(subject, hospitalId);
-        Hospital hospital = hospital(hospitalId);
-        Sector sector = sector(hospitalId, sectorId);
-        validarSectorSinPacientes(sectorId);
-        validarSectorSinSesionesActivas(sectorId);
+        Hospital hospital = bloquearHospital(hospitalId);
+        Sector sector = sectores.findByIdAndHospitalIdForUpdate(sectorId, hospitalId)
+                .orElseThrow(() -> new RecursoNoEncontradoException("Sector no encontrado"));
+        if (sector.isArchivado()) return;
+
         List<Sala> salasDelSector = salas.findBySectorId(sectorId);
         List<Long> salaIds = salasDelSector.stream().map(Sala::getId).toList();
+        validarSectorSinPacientes(sectorId, salaIds);
+        validarSectorSinSesionesActivas(sectorId, salaIds);
+
+        GestorDeCola gestor = gestoresDeColas.findBySectorId(sectorId).orElse(null);
+        List<ConsultaMedica> colaLegada = gestor == null || gestor.getConsultasEnEspera() == null
+                ? List.of() : gestor.getConsultasEnEspera();
+        if (gestor != null && (entradasCola.existsByGestorDeColaIdAndEstadoNotIn(gestor.getId(), ENTRADAS_TERMINALES)
+                || colaLegada.stream().anyMatch(consulta -> consulta.getEstadoConsulta() == null
+                        || !CONSULTAS_TERMINALES.contains(consulta.getEstadoConsulta())))) {
+            throw new ConflictoDeEstadoException("El sector todavía tiene pacientes pendientes en la cola");
+        }
+
         if (consultasMedicas.existsBySectorId(sectorId)
                 || (!salaIds.isEmpty() && consultasMedicas.existsBySalaIdIn(salaIds))
                 || sesionesAtencionMedica.existsBySectorId(sectorId)
                 || (!salaIds.isEmpty() && sesionesAtencionMedica.existsBySalaIdIn(salaIds))
-                || (sector.getPacientesAsignados() != null && !sector.getPacientesAsignados().isEmpty())) {
-            throw new ConflictoDeEstadoException(
-                    "El sector tiene consultas, sesiones o pacientes vinculados; desactivalo para conservar el historial");
+                || (sector.getPacientesAsignados() != null && !sector.getPacientesAsignados().isEmpty())
+                || !colaLegada.isEmpty()
+                || (gestor != null && entradasCola.existsByGestorDeColaId(gestor.getId()))) {
+            sector.setArchivado(true);
+            sector.setActiva(false);
+            desactivarSalasDeSector(sector, actor, salasDelSector);
+            sectores.save(sector);
+            auditar(hospital, actor, "SECTOR_ARCHIVADO", "sector:" + sectorId, sector.getNombre());
+            return;
         }
-        GestorDeCola gestor = gestoresDeColas.findBySectorId(sectorId).orElse(null);
-        if (gestor != null) {
-            if ((gestor.getConsultasEnEspera() != null && !gestor.getConsultasEnEspera().isEmpty())
-                    || (gestor.getEntradas() != null && !gestor.getEntradas().isEmpty())) {
-                throw new ConflictoDeEstadoException(
-                        "El sector tiene actividad de cola asociada; desactivalo para conservar el historial");
+        // Bulk deletes leave existing links intact so the database can reject newly referenced rows.
+        try {
+            if (gestor != null) {
+                gestoresDeColas.deleteAllByIdInBatch(List.of(gestor.getId()));
             }
-            gestoresDeColas.delete(gestor);
+            if (!salaIds.isEmpty()) {
+                salas.deleteAllByIdInBatch(salaIds);
+            }
+            sectores.deleteAllByIdInBatch(List.of(sectorId));
+        } catch (DataIntegrityViolationException error) {
+            throw new ConflictoDeEstadoException(
+                    "El sector recibió nuevas vinculaciones; revisá su actividad antes de eliminarlo");
         }
         for (Sala sala : salasDelSector) {
-            salas.delete(sala);
             auditar(hospital, actor, "SALA_ELIMINADA", "salaId:" + sala.getId() + " sector:" + sectorId, sala.getNombre());
         }
-        sectores.delete(sector);
         auditar(hospital, actor, "SECTOR_ELIMINADO", "sector:" + sectorId, sector.getNombre());
     }
 
     private Hospital hospital(Long id) {
         return hospitales.findById(id).orElseThrow(() -> new RecursoNoEncontradoException("Hospital no encontrado"));
+    }
+
+    private Hospital bloquearHospital(Long id) {
+        return hospitales.findByIdForUpdate(id)
+                .orElseThrow(() -> new RecursoNoEncontradoException("Hospital no encontrado"));
     }
 
     private EspecialidadMedica especialidad(Long id) {
@@ -281,24 +326,24 @@ public class HospitalConfigurationService {
 
     private Sector sector(Long hospitalId, Long sectorId) {
         return sectores.findByIdAndHospitalId(sectorId, hospitalId)
+                .filter(item -> !item.isArchivado())
                 .orElseThrow(() -> new RecursoNoEncontradoException("Sector no encontrado"));
     }
 
     private void validarSectorSinPacientes(Long sectorId) {
-        List<Sala> salasDelSector = salas.findBySectorId(sectorId);
-        List<Long> salaIds = salasDelSector.stream().map(Sala::getId).toList();
-        List<EstadoConsulta> estadosFinalizados = List.of(EstadoConsulta.FINALIZADA, EstadoConsulta.CANCELADA);
-        if (consultasMedicas.existsBySectorIdAndEstadoConsultaNotIn(sectorId, estadosFinalizados)
-                || (!salaIds.isEmpty() && consultasMedicas.existsBySalaIdInAndEstadoConsultaNotIn(salaIds, estadosFinalizados))) {
+        validarSectorSinPacientes(sectorId, salas.findBySectorId(sectorId).stream().map(Sala::getId).toList());
+    }
+
+    private void validarSectorSinPacientes(Long sectorId, List<Long> salaIds) {
+        if (consultasMedicas.existsBySectorIdAndEstadoConsultaNotIn(sectorId, CONSULTAS_TERMINALES)
+                || (!salaIds.isEmpty() && consultasMedicas.existsBySalaIdInAndEstadoConsultaNotIn(salaIds, CONSULTAS_TERMINALES))) {
             throw new ConflictoDeEstadoException(
                     "No se puede modificar o eliminar un sector con pacientes pendientes o en atención");
         }
     }
 
-    private void desactivarSalasDeSector(Sector sector, UsuarioAuth actor) {
-        List<Sala> salasDelSector = salas.findBySectorId(sector.getId());
-        if (salasDelSector.isEmpty()) return;
-        salasDelSector.forEach(sala -> {
+    private void desactivarSalasDeSector(Sector sector, UsuarioAuth actor, List<Sala> salasDelSector) {
+        salasDelSector.stream().filter(Sala::isActiva).forEach(sala -> {
             sala.setActiva(false);
             auditar(sector.getHospital(), actor, "SALA_DESACTIVADA",
                     "sala:" + sala.getId(), sala.getNombre() + " · " + sector.getNombre());
@@ -307,19 +352,20 @@ public class HospitalConfigurationService {
     }
 
     private void validarSectorSinSesionesActivas(Long sectorId) {
-        List<Sala> salasDelSector = salas.findBySectorId(sectorId);
-        List<Long> salaIds = salasDelSector.stream().map(Sala::getId).toList();
-        List<EstadoSesionMedica> estadosActivos = List.of(EstadoSesionMedica.ACTIVA, EstadoSesionMedica.PAUSADA);
-        if (sesionesAtencionMedica.existsBySectorIdAndEstadoIn(sectorId, estadosActivos)
-                || (!salaIds.isEmpty() && sesionesAtencionMedica.existsBySalaIdInAndEstadoIn(salaIds, estadosActivos))) {
+        validarSectorSinSesionesActivas(sectorId, salas.findBySectorId(sectorId).stream().map(Sala::getId).toList());
+    }
+
+    private void validarSectorSinSesionesActivas(Long sectorId, List<Long> salaIds) {
+        if (sesionesAtencionMedica.existsBySectorIdAndEstadoIn(sectorId, SESIONES_QUE_RESERVAN_SALA)
+                || (!salaIds.isEmpty() && sesionesAtencionMedica.existsBySalaIdInAndEstadoIn(
+                        salaIds, SESIONES_QUE_RESERVAN_SALA))) {
             throw new ConflictoDeEstadoException(
                     "No se puede modificar o eliminar un sector con sesiones de atención activas o pausadas");
         }
     }
 
     private void validarSalaSinSesionesActivas(Long salaId) {
-        if (sesionesAtencionMedica.existsBySalaIdAndEstadoIn(salaId,
-                List.of(EstadoSesionMedica.ACTIVA, EstadoSesionMedica.PAUSADA))) {
+        if (sesionesAtencionMedica.existsBySalaIdAndEstadoIn(salaId, SESIONES_QUE_RESERVAN_SALA)) {
             throw new ConflictoDeEstadoException(
                     "No se puede desactivar una sala con sesiones de atención activas o pausadas");
         }

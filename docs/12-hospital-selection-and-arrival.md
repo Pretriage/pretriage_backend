@@ -166,6 +166,8 @@ The backend:
 
 The consultation enters the queue at hospital selection (`POST /api/atencion/hospital`):
 
+- A current sanction returns `403 PATIENT_SANCTIONED` for a new remote registration.
+  Hospital listing, estimated times, and admission at reception remain available.
 - The consultation becomes `EN_COLA` and an `EntradaCola` is created with default priority in the assigned sector's `GestorDeCola`.
 - Queue position and estimated attention time are calculated based on current queue state of that sector.
 - The AI triage chat is optional; when it finishes, the `EntradaCola` priority is updated with the pretriage result.

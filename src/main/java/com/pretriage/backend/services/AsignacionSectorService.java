@@ -8,6 +8,7 @@ import com.pretriage.backend.repositories.RepoEntradasCola;
 import com.pretriage.backend.repositories.RepoSectores;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Comparator;
 import java.util.List;
@@ -20,6 +21,7 @@ public class AsignacionSectorService {
     private final RepoSectores repoSectores;
     private final RepoEntradasCola repoEntradasCola;
 
+    @Transactional
     public Sector asignarSector(ConsultaMedica consultaMedica) {
         if (consultaMedica.getHospital() == null || consultaMedica.getEspecialidad() == null) {
             throw new IllegalArgumentException(
@@ -29,7 +31,7 @@ public class AsignacionSectorService {
         Long hospitalId = consultaMedica.getHospital().getId();
         Long especialidadId = consultaMedica.getEspecialidad().getId();
         List<Sector> sectores = repoSectores
-                .findByHospitalIdAndEspecialidadIdAndActivaTrueOrderByNombreAsc(hospitalId, especialidadId);
+                .findSectoresActivosParaAsignacion(hospitalId, especialidadId);
 
         Sector sector = sectores.stream()
                 .filter(this::tieneSalasActivas)

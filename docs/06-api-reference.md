@@ -256,6 +256,12 @@ GET /api/especialidades
 
 Returns available medical specialties sorted by name.
 
+The initial catalog display names are Clínica médica, Pediatría, Cardiología,
+Traumatología and Ginecología. Their stable API identifiers remain
+`CLINICA_MEDICA`, `PEDIATRIA`, `CARDIOLOGIA`, `TRAUMATOLOGIA` and
+`GINECOLOGIA`. Existing databases can normalize legacy names with
+`scripts/migrations/20261110_normalizar_nombres_especialidades.sql`.
+
 ## Hospitals
 
 ### Nearby Hospitals Filtered By Specialty
@@ -285,6 +291,12 @@ Assigns the hospital and specialty to the active consultation and enters it into
 the queue (`EN_COLA` + `EntradaCola`) with default priority (`NORMAL`). The AI
 triage chat is optional; when it finishes, the queue priority is updated with the
 pretriage result.
+
+Returns HTTP 403 with `codigo: "PATIENT_SANCTIONED"` and `error`, `vigente`,
+`permanente`, `fechaFin`, `avisoId`, and `tipoAviso` if a sanction blocks
+new remote registration. `fechaFin` is an ISO-8601 instant for a temporary
+sanction and `null` for a permanent sanction. Existing consultations and
+reception-assisted admission use their own flows.
 
 Returns `204 No Content`. The dynamic estimate is available via `GET /api/atencion/tiempo-estimado` (`TiempoEstimadoAtencionResponse` with `consultaId`, `fechaHoraAtencionEstimada`, `posicionEnCola`, `pacientesAntes`, `minutosPromedioAtencion`, `hayMedicosActivos`, `medicosActivos`, `medicosParaEstimacion`, `sectorId`, `nombreSector` from `ConsultaMedica.sector`, `codigoSala` from `Sala.nombre` — `null` until the doctor calls the patient — and `mensaje` when `hayMedicosActivos=false`).
 
@@ -611,6 +623,18 @@ Voice and text turns share the same `Chat`.
 See [the interaction guide](14-chat-voz-gemini-live.md) for the full sequence,
 mobile responsibilities, persistence and connection recovery semantics.
 
+## Estado de sanción del paciente
+
+```http
+GET /api/paciente/sancion
+```
+
+Devuelve el estado del paciente autenticado según su DNI. La respuesta incluye
+`vigente`, `permanente`, `fechaFin` y el último aviso disponible con
+`avisoId` y `tipoAviso` (`APLICADA`, `LEVANTADA` o `null`). La app usa
+el ID del aviso para evitar repetirlo y la fecha de fin para mostrar cuándo
+se rehabilita el ingreso remoto.
+
 ## Patient Queue State
 
 All endpoints in this section are under `PacienteEsperaController` (`EsperaPacienteService`) and operate on the active `EntradaCola` of the authenticated patient. Every response is `EstadoConsultaPacienteDTO` (`consultaId`, `estadoConsulta`, `estadoEntradaCola`, `tipoPausa`, `fechaHoraLimiteRespuesta`, `sectorId`, `nombreSector` from `ConsultaMedica.sector`, `tiempoEstimadoAtencion` which is non-null only when `estadoEntradaCola == EN_COLA`).
@@ -619,7 +643,7 @@ All endpoints in this section are under `PacienteEsperaController` (`EsperaPacie
 GET /api/paciente/consulta/estado
 ```
 
-Returns the current queue/consultation state for the authenticated patient (no state change). Valid for `EN_COLA`, `LLAMADO`, `EN_ESPERA`, `ATRASADO`, `EN_ATENCION` (see `EsperaPacienteService.obtenerEntradaActivaPaciente`). When the entry is `EN_COLA`, the payload includes the dynamic estimate from `EstimacionAtencionService.calcularPara` (`TiempoEstimadoAtencionResponse`). Example: `docs/04-queue-and-estimation.md`.
+Returns the current queue/consultation state for the authenticated patient (no state change). Valid for `EN_COLA`, `EN_REVISION`, `LLAMADO`, `EN_ESPERA`, `ATRASADO`, and `EN_ATENCION`. `EN_REVISION` means the doctor reserved the consultation and has yet to call. When the entry is `EN_COLA`, the payload includes the dynamic estimate from `EstimacionAtencionService.calcularPara` (`TiempoEstimadoAtencionResponse`).
 
 ### Pausar Cola Manualmente (salida voluntaria)
 
@@ -662,15 +686,17 @@ Other states are rejected with `IllegalStateException`. On success `tiempoEstima
 POST /api/paciente/consulta/cancelar
 ```
 
-Patient voluntarily and definitively abandons their **active hospital selection** at any point of the attention flow (`EsperaPacienteService.cancelarSeleccion`). The client requests confirmation (dialog) before calling this endpoint, which is **idempotent** and safe to retry. The endpoint deterministically resolves the patient's current selection: it operates on the most recent `EntradaCola` (`RepoEntradasCola.findFirstByConsultaMedicaPacienteIdOrderByIdDesc`). Historical `CANCELADA`/`FINALIZADA` entries from previous selections are ignored, so they can neither shadow the active selection nor produce a spurious `409`/no-op response.
+Patient voluntarily and definitively abandons their **active hospital selection** from an eligible state. The client requests confirmation before calling this idempotent endpoint. It operates on the most recent `EntradaCola` (`RepoEntradasCola.findFirstByConsultaMedicaPacienteIdOrderByIdDesc`).
 
 Allowed `EntradaCola` states of the resolved (most recent) entry:
 
-* `EN_COLA`, `LLAMADO`, `EN_ESPERA`, `ATRASADO` → entry transitions to `CANCELADA` (clears `tipoPausa`, `fechaHoraLimiteRespuesta`, `fechaHoraUltimaRepregunta`); `ConsultaMedica` transitions to `CANCELADA` (clears `medico` and `sala`). The entry stops counting for estimation and availability, the doctor can no longer call or re-see the patient (`listarPacientesDisponibles`/`llamarProximo` only read `EN_COLA`, `obtenerSesionActual` only `LLAMADO`/`EN_ATENCION`), and any open AI triage chat is finalized (`RepoChat.findFirstByPacienteUsuarioAuthIdAndFinalizadoFalse`).
+* `EN_COLA`, `EN_ESPERA`, `ATRASADO` → entry and consultation transition to `CANCELADA`. Queue availability, estimation, doctor assignment, and room are cleared, and any open AI triage chat is finalized.
 * `CANCELADA` → no-op success (idempotent retry).
 
 Rejected with `409 ConflictoDeEstadoException`:
 
+* `EN_REVISION` → the doctor is reviewing the consultation.
+* `LLAMADO` → the doctor is calling the patient.
 * `EN_ATENCION` → `"No puede cancelar una consulta con atencion en curso"` (consultation in progress).
 * `FINALIZADA` → `"La consulta ya finalizo y no se puede cancelar"`.
 
@@ -692,7 +718,7 @@ Returns the authenticated doctor's hospital and specialty assignments.
 GET /api/hospitales/{hospitalId}/sectores?codigoEspecialidad={codigoEspecialidad}
 ```
 
-Returns the active sectors (`Sector.activa=true`) of a hospital for the given specialty, ordered by name ASC.
+Returns active, non-archived sectors of a hospital for the given specialty, ordered by name ASC.
 
 ### List Rooms
 
@@ -709,7 +735,7 @@ GET /api/medico/sesiones/actual
 ```
 
 Returns the authenticated doctor's active or paused session together with the
-currently called or in-attention consultation. Both values are nullable.
+consultation currently in review, called, or in attention. Both values are nullable.
 
 ### Start Session
 
@@ -737,11 +763,27 @@ POST /api/medico/sesiones/{id}/reanudar
 POST /api/medico/sesiones/{id}/cerrar
 ```
 
-### Call Next Patient
+### Reserve Next Patient For Review
 
 ```http
-POST /api/medico/sesiones/{id}/llamar-proximo
+POST /api/medico/sesiones/{sesionId}/seleccionar-proximo
 ```
+
+Returns `ConsultaLlamadaDTO` with `EN_REVISION`. The first available patient is
+reserved for the active doctor's session and removed from the queue estimate.
+Repeating selection while the reservation is open returns that same patient.
+
+### Call Or Return The Reserved Patient
+
+```http
+POST /api/medico/sesiones/{sesionId}/consultas/{consultaId}/llamar
+POST /api/medico/sesiones/{sesionId}/consultas/{consultaId}/devolver-a-cola
+```
+
+Both return `ConsultaLlamadaDTO`. Calling sets `LLAMADO` and records the call time.
+Returning sets `EN_COLA` and preserves the original queue position.
+The legacy `POST /api/medico/sesiones/{sesionId}/llamar-proximo` still supports
+direct calls for existing clients.
 
 ### Mark Patient Absent
 
@@ -752,15 +794,12 @@ POST /api/medico/sesiones/{sesionId}/consultas/{consultaId}/ausente
 ### List Available Patients
 
 ```http
-GET /api/medico/sesiones/{sesionId}/pacientes-disponibles?dni={dni}
+GET /api/medico/sesiones/{sesionId}/pacientes-disponibles
 ```
 
 Returns ordered `EntradaCola.EN_COLA` consultations for the session hospital, specialty and sector,
-including the effective priority, patient name and surname, document (`numeroDocumento`/`tipoDocumento`) and `estadoConsulta`. For queued patients the effective priority is the preliminary backend classification. Room fields remain null until the consultation is called.
-
-`dni` is optional. When provided, the backend filters by exact match on `Paciente.numeroDocumento` (trimmed, `String` exact equals) within the same hospital/specialty/sector queue and ordered by `prioridad DESC, ordenRelativo ASC, fechaHoraIngreso ASC`. The filtering is executed at DB level via `RepoEntradasCola.findByGestorDeColaIdAndEstadoAndConsultaMedicaPacienteNumeroDocumento...` for acceptable response times. Blank or missing `dni` returns the full ordered queue. Non-matching `dni` returns `[]` (empty JSON array, `200 OK`) — the frontend must show the “no coincidences” message.
-
-Example: `GET /api/medico/sesiones/42/pacientes-disponibles?dni=30111222`
+including the preliminary priority, patient name and surname, document
+(`numeroDocumento`/`tipoDocumento`) and `estadoConsulta`.
 
 Response item (`ConsultaLlamadaDTO`):
 
@@ -798,15 +837,15 @@ Creates an `AtencionMedica.EN_CURSO` historical record.
 GET /api/medico/sesiones/{sesionId}/consultas/{consultaId}/pretriaje
 ```
 
-Available only to the doctor/session that owns an `EN_ATENCION` consultation.
+Available to the active doctor/session assigned to a consultation in
+`EN_REVISION`, `LLAMADO`, or `EN_ATENCION`.
 Returns the normalized clinical summary, preliminary and effective priorities,
 and `PENDIENTE`, `CONFIRMADA`, or `CORREGIDA` review state. It also returns
 `estadoClasificacion`, `cierreParcial`, and the literal `mensajesConversacion`.
 When a chat closed partially without a valid AI result, `resumenClinico` is null,
 `estadoClasificacion` is `PARCIAL`, and the doctor sees the conversation in the
-same consultation view. The queue's initial priority is provisional in that case;
-the existing doctor review remains available. Authorization remains limited to
-the owning active session and its `EN_ATENCION` consultation.
+same consultation view. The queue's initial priority is provisional in that case.
+Priority review becomes available when the patient is in attention.
 
 ### Confirm Or Correct Priority
 
@@ -819,6 +858,26 @@ Confirm with `{ "decision": "CONFIRMAR" }`. Correct with
 The corrected priority must differ from the preliminary priority. The operation
 is idempotent for an identical payload and preserves every genuine change.
 
+### Discrepancia de síntomas declarados
+
+```http
+GET /api/medico/sesiones/{sesionId}/consultas/{consultaId}/discrepancia-sintomas
+PUT /api/medico/sesiones/{sesionId}/consultas/{consultaId}/discrepancia-sintomas
+```
+
+Ambas operaciones requieren la sesión activa del médico autenticado y una
+atención en curso de esa sesión. El `GET` devuelve el estado del reporte.
+El `PUT` se envía sin cuerpo después de la confirmación del médico.
+Ambas operaciones devuelven HTTP 200 con `registrada` y `puedeRegistrar`.
+El registro requiere un DNI válido y una declaración previa de síntomas.
+
+Cada atención admite un único registro, incluso después de una anulación.
+Repetir el `PUT` conserva el registro y el estado de sanción. Una sesión
+ajena devuelve HTTP 403, una atención ajena HTTP 404 y un estado no
+compatible con el registro HTTP 409. La marca queda auditada por hospital
+y recalcula el acceso a nuevas inscripciones remotas, de forma independiente
+de la revisión de prioridad.
+
 ### Finish Attention
 
 ```http
@@ -830,25 +889,56 @@ Returns `409` until priority has been reviewed.
 
 ### Clinical History Access
 
-During attention, doctors can view patient's previous medical records:
+#### Read Clinical Details For The Assigned Consultation
 
-#### Get All Medical Records
+```http
+GET /api/medico/sesiones/{sesionId}/consultas/{consultaId}/datos-clinicos
+```
+
+Returns `fechaNacimiento`, `generoBiologico`, `generoConElQueSeIdentifica`,
+`peso` (kg), `altura` (cm), and the `estudios` array. Profile values may be null.
+Active studies are ordered by most recent `fechaSubida` and include `id`,
+`nombreArchivo`, `tipoArchivo`, `extensionArchivo`, `descripcion`, `fechaSubida`,
+and `tamanoArchivo`. The same response supports review before calling and the
+attention view. The doctor must own the active session, and the consultation must
+be assigned to that doctor and room in `EN_REVISION`, `LLAMADO`, or `EN_ATENCION`.
+
+#### Open A Study For The Assigned Consultation
+
+```http
+GET /api/medico/sesiones/{sesionId}/consultas/{consultaId}/datos-clinicos/estudios/{estudioId}/archivo
+```
+
+Requires the same session authorization and an active study of that patient.
+PDF, JPEG, PNG, GIF, WebP, and BMP responses carry their MIME type and
+`Content-Disposition: inline`. Other formats return `application/octet-stream`
+with attachment disposition. Both consultation routes send `Cache-Control: no-store`.
+If the file storage reports a failure, the attachment route returns `503`.
+The clinical details route reads profile and study metadata from the database and
+works when file storage is disabled.
+
+#### Patient-Specific History
+
+The following history endpoints require a recorded attention by the authenticated
+doctor for the specified patient, either in progress or finalized.
+
+##### Get All Medical Records
 
 ```http
 GET /api/medico/pacientes/{pacienteId}/historial-clinico
 ```
 
-Retrieves all medical records (PDFs, images) for a specific patient. Returns list of medical histories with metadata.
+Returns metadata for all active medical records of the patient.
 
-#### Download Specific Record
+##### Download Specific Record
 
 ```http
 GET /api/medico/pacientes/{pacienteId}/historial-clinico/{estudioId}/archivo
 ```
 
-Downloads or previews a specific medical record file (e.g., radiology scans, previous reports).
+Downloads a specific active medical record file.
 
-#### Get Record Metadata
+##### Get Record Metadata
 
 ```http
 GET /api/medico/pacientes/{pacienteId}/historial-clinico/{estudioId}/reporte
@@ -856,7 +946,7 @@ GET /api/medico/pacientes/{pacienteId}/historial-clinico/{estudioId}/reporte
 
 Retrieves structured information about a specific medical record (type, date, description).
 
-#### Get Recent Records
+##### Get Recent Records
 
 ```http
 GET /api/medico/pacientes/{pacienteId}/ultimos-reportes?limite=5
@@ -864,7 +954,8 @@ GET /api/medico/pacientes/{pacienteId}/ultimos-reportes?limite=5
 
 Gets up to `limite` most recent active medical records for quick triage reference, ordered by `fechaSubida` DESC. `limite` is optional, defaults to `5`; only studies with `activo=true` are returned. Values `< 1` return `400`.
 
-Pause, close, and call-next operations are rejected while the doctor has a patient `LLAMADO` or `EN_ATENCION`.
+Pause and close operations are rejected while the doctor has a patient
+`EN_REVISION`, `LLAMADO`, or `EN_ATENCION`.
 
 ## Real-Time Estimated Attention
 
@@ -1003,6 +1094,9 @@ GET /api/pacientes/{idPaciente}/obrasocial/credenciales
 POST /api/pacientes/{idPaciente}/obrasocial/credencial
 ```
 
+Reception can add or update a credential only when `fechaVencimiento` is strictly after the
+current date in Argentina. The request uses the ISO date format (`YYYY-MM-DD`).
+
 Body:
 
 ```json
@@ -1025,6 +1119,9 @@ DELETE /api/pacientes/{idPaciente}/obrasocial/credenciales/{idCredencial}
 ```http
 PUT /api/pacientes/{idPaciente}/obrasocial/credenciales/{idCredencial}
 ```
+
+The receptionist can keep the current obra social and affiliate number when editing the plan or
+expiration date. A number already assigned to another credential for that obra social is rejected.
 
 Body:
 
@@ -1093,7 +1190,11 @@ All operations are scoped to the hospital in the URL and require an active
 GET /api/admin/hospitales/{hospitalId}/configuracion
 ```
 
-Returns the hospital's enabled specialties, rooms and sectors. Response is `ConfiguracionHospitalResponse` with `especialidades`, `salas` and `sectores` (`SectorHospitalResponse` list, ordered by `nombre` ASC).
+Returns `ConfiguracionHospitalResponse` with the specialty catalog and its
+hospital enablement flags, `salas`, `sectores` (ordered by name), and
+`salasOcupadasIds`. The latter contains distinct rooms reserved by an
+`ACTIVA` or `PAUSADA` medical session at the selected hospital.
+Archived sectors and their rooms are excluded from configuration.
 
 Example `sectores` item:
 
@@ -1231,17 +1332,19 @@ Blocking rules (`409` if violated):
   to the sector before a room is selected.
 * Medical sessions referencing the sector or its rooms in `ACTIVA` or `PAUSADA`
   return `409 { "error": "No se puede modificar o eliminar un sector con sesiones de atención activas o pausadas" }`.
-* Any historical consultation/session referencing the sector or its rooms, or a
-  patient still linked through `id_sector_asignado`, prevents physical deletion.
-  The conflict explains that the sector should be deactivated to preserve history.
-* A queue manager with consultations or queue-entry history also prevents deletion,
-  including entries that no longer count as waiting patients.
+* Nonterminal queue entries linked through the sector's queue manager block
+  deletion, including paused entries that do not count toward waiting time.
 
 For a never-used sector, an empty queue manager is removed first, followed by its
-rooms and the sector, in one transaction. No consultation, patient, session or
-queue-entry history is deleted. `404` if sector not in hospital. Audits each
-`SALA_ELIMINADA` and `SECTOR_ELIMINADO`. Clients must accept the successful `204`
-without parsing a JSON body, then refetch configuration and audit.
+rooms and the sector, in one transaction. Foreign keys protect references
+added during deletion and the transaction returns `409` if such a conflict
+occurs. If only historical references remain, deletion archives the sector,
+deactivates its rooms, and preserves the consultations, sessions, patient
+associations and queue records. The archived sector and its rooms disappear
+from configuration and room totals. The backend records `SECTOR_ARCHIVADO`
+for archival and `SALA_ELIMINADA` and `SECTOR_ELIMINADO` for physical deletion.
+A repeat on an archived sector returns `204`. A missing sector or one outside
+the hospital returns `404`. Clients refetch configuration after the empty `204`.
 
 ### List Medical Sessions Of A Sector
 
@@ -1280,17 +1383,34 @@ Closing an already finalized session is idempotent: the existing end time is kep
 and no duplicate audit is written.
 
 Returns `409 { "error": "No se puede cerrar la sesión mientras tenga una consulta llamada o en atención" }`
-if the doctor has an `EntradaCola` in `LLAMADO`/`EN_ATENCION` or the session has an
+if the doctor has an `EntradaCola` in `EN_REVISION`, `LLAMADO`, or `EN_ATENCION` or the session has an
 `AtencionMedica.EN_CURSO`. It never cancels that consultation. Administrative
 closure and doctor state changes share a pessimistic session lock and validate
 state after acquiring it. The closure releases the doctor/room reservation and
 removes active capacity from estimation, preserving all history and queued
-patients. It does not make a previously used sector physically deletable;
-deactivate it once all pending patients and sessions have been resolved.
+patients. Once all pending patients and sessions have been resolved,
+`DELETE` archives the sector and removes it from configuration.
 
 The web panel confirms closure per session, then refetches the sector sessions,
 hospital configuration and audit. Mutation controls remain pending through that
 refresh; a rejected close leaves the dialog open with the backend error.
+
+## Discrepancias del hospital
+
+```http
+GET /api/admin/hospitales/{hospitalId}/discrepancias
+POST /api/admin/hospitales/{hospitalId}/discrepancias/{discrepanciaId}/anular
+```
+
+Ambas operaciones requieren administración del hospital indicado. El listado
+incluye `id`, `pacienteNombre`, `pacienteDni`, `medicoNombre`,
+`registradaEn`, `estado` (`VIGENTE` o `ANULADA`) y la `sancion`
+resultante por DNI.
+
+La anulación se envía sin cuerpo. Devuelve HTTP 204 y deja el registro con
+el usuario administrador y la fecha de anulación. Recalcula la sanción según
+las discrepancias vigentes restantes y audita ambos cambios. Si el ID pertenece
+a otro hospital, devuelve HTTP 404. Repetir una anulación devuelve HTTP 409.
 
 ## Hospital Metrics (Hospital Admin)
 
@@ -1302,7 +1422,10 @@ GET /api/admin/hospitales/{hospitalId}/metricas?desde=2026-09-01&hasta=2026-09-3
 
 `MetricasHospitalController` → `MetricasHospitalService`. Requires an active `ADMIN_HOSPITAL` membership for `{hospitalId}` (`StaffAccessService.exigirAdminHospital`, checked first) → otherwise `403`. Unauthenticated → `401`.
 
-Query params (both required, ISO `yyyy-MM-dd`, inclusive): `desde`, `hasta`. They are converted to `[desde 00:00, hasta+1 00:00)`. `desde > hasta` → `400` (`IllegalArgumentException`); missing or malformed dates → `400`.
+Both query parameters are required in ISO `yyyy-MM-dd`. The backend requires
+`desde <= hasta <= hoy` using the Buenos Aires calendar. It includes both
+dates in the query (`[desde 00:00, hasta+1 00:00)`). Equal dates query one
+day. Inverted, future, missing, or malformed dates return `400`.
 
 **Funnel semantics**: every metric is anchored on `EntradaCola.fechaHoraIngreso` of the hospital's queues inside the range. `pacientesAtendidos` are, among those entries, the ones whose `AtencionMedica` is `FINALIZADA` (even if it finished after `hasta`). Patients who entered near the end of the period and were not yet attended count as `pacientesNoAtendidos`. Wait time = `AtencionMedica.fechaHoraInicio - EntradaCola.fechaHoraIngreso`, averaged only over attended patients. "Pretriage realizado" counts chats classified `COMPLETADA`, plus legacy rows whose classification state is null and whose `resultadoTriageJson` is present. Partial, failed, pending, reception-only and unlinked consultations count in `pretriageNoRealizado`. `distribucionGravedadBot` only counts valid completed AI classifications; its explicit `SIN_CLASIFICACION_IA` bucket includes every queue arrival without one, so provisional `NORMAL` is not presented as an AI result. Medical and operational metrics continue to count all arrivals. To compare periods, call the endpoint twice with different ranges.
 

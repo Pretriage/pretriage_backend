@@ -20,11 +20,11 @@ public class EspecialidadesMedicasSeeder implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         List<EspecialidadInicial> especialidades = List.of(
-                new EspecialidadInicial("CLINICA_MEDICA", "Clinica medica"),
-                new EspecialidadInicial("PEDIATRIA", "Pediatria"),
-                new EspecialidadInicial("CARDIOLOGIA", "Cardiologia"),
-                new EspecialidadInicial("TRAUMATOLOGIA", "Traumatologia"),
-                new EspecialidadInicial("GINECOLOGIA", "Ginecologia")
+                new EspecialidadInicial("CLINICA_MEDICA", "Clínica médica"),
+                new EspecialidadInicial("PEDIATRIA", "Pediatría"),
+                new EspecialidadInicial("CARDIOLOGIA", "Cardiología"),
+                new EspecialidadInicial("TRAUMATOLOGIA", "Traumatología"),
+                new EspecialidadInicial("GINECOLOGIA", "Ginecología")
         );
 
         especialidades.stream()

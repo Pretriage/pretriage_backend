@@ -98,6 +98,18 @@ membresia_id
 rol: ADMIN_HOSPITAL | MEDICO | RECEPCIONISTA
 ```
 
+Membership roles remain assigned when individually suspended. The separate
+`membresia_hospital_rol_suspendido` collection records suspended role IDs;
+effective roles are assigned roles minus suspended roles. Hospital authorization,
+including administration and staff workspace access, uses effective roles. The
+`/api/staff/me` context exposes effective roles in `roles` and omits memberships
+with no effective roles. Administrative personnel and mutation responses retain
+the assigned role list in `roles`. A targeted suspension preserves the
+membership state and other roles. Role
+reactivation restores the existing assignment. Existing PostgreSQL deployments
+must apply `scripts/migrations/20261109_membresia_rol_suspendido.sql` before
+starting the updated application.
+
 The former `COORDINADOR_MEDICO` role is consolidated into `ADMIN_HOSPITAL`. An
 idempotent compatibility migration converts existing memberships and pending
 invitations without removing any other roles.
@@ -298,6 +310,27 @@ The raw invitation token must never be logged.
 The selected route does not grant authority; every backend operation revalidates the
 authenticated subject, active membership, role, hospital, and resource ownership.
 
+### Membership status and staff sessions
+
+An existing membership is authoritative during lazy legacy access migration:
+`SUSPENDIDA` and `REVOCADA` memberships stay disabled, and migration does not
+restore roles that an administrator removed. Legacy profile relationships are
+still accepted when no membership row exists. Starting a doctor or reception
+session requires an existing membership to be `ACTIVA` and include the matching
+hospital role; those session starts continue to use legacy profile authorization
+when the membership row is absent. Accepting an older pending invitation cannot
+reactivate a `SUSPENDIDA` membership; a hospital administrator must reactivate it.
+A `REVOCADA` membership can become active again when the invited user accepts a
+new valid invitation.
+
+Session starts and hospital membership status/role changes serialize on the
+selected hospital row. Suspending or revoking a membership returns `409` while
+the person has an active or paused medical session, or an active reception
+session, in that same hospital. Removing the corresponding medical or reception
+role also returns `409` while that role has an open session there. Close the
+session before changing access. These checks do not affect sessions or
+memberships at other hospitals.
+
 ## Security and audit requirements
 
 - Replace the provisional password-realm/ID-token integration with Authorization
@@ -366,6 +399,7 @@ POST   /api/admin/hospitales/{hospitalId}/invitaciones/{invitacionId}/reenviar
 DELETE /api/admin/hospitales/{hospitalId}/invitaciones/{invitacionId}
 PATCH  /api/admin/hospitales/{hospitalId}/membresias/{membresiaId}
 PUT    /api/admin/hospitales/{hospitalId}/membresias/{membresiaId}/roles
+PATCH  /api/admin/hospitales/{hospitalId}/membresias/{membresiaId}/roles/{rol}
 GET    /api/admin/hospitales/{hospitalId}/auditoria
 GET    /api/platform/hospitales
 POST   /api/platform/hospitales/{hospitalId}/primer-admin/invitaciones
@@ -406,10 +440,10 @@ specialty, room and session metadata only, without patient data.
 Sector changes also reject pending consultations assigned directly to the sector,
 even before they have a room. Physical sector deletion is limited to never-used
 sectors: an empty queue manager and their unreferenced rooms can be removed in
-the same transaction. Consultations, medical-session history, assigned patients
-or queue-entry history yield `409` with an actionable message instead of a
-database foreign-key error. Deactivate a sector with history after resolving any
-pending patients/sessions. Successful deletion returns an empty `204` response.
+the same transaction. Deleting a sector with historical references archives it
+and its rooms out of configuration, preserving those references. Pending
+patients and active or paused sessions return `409` until resolved. Successful
+deletion returns an empty `204` response.
 
 The public `/api/register` endpoint now rejects doctor, receptionist and admin
 registration. Invitation registration derives hospital roles from the stored
@@ -431,6 +465,13 @@ outbox remains required before production so provider outages can be retried and
 observed independently of request processing.
 
 ## Acceptance criteria
+
+The targeted role endpoint accepts `{"estado":"SUSPENDIDA"}` or
+`{"estado":"ACTIVA"}`. Personnel responses expose assigned `roles` and
+`rolesSuspendidos`. Staff context memberships expose effective `roles`.
+The endpoint changes one assigned role only, and the backend
+rejects suspending the final effective administrator or suspending a medical or
+reception role while its hospital session is open.
 
 - An existing receptionist can accept a doctor invitation without a second account.
 - A doctor can belong to multiple hospitals with different specialties and roles.

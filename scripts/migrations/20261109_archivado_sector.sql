@@ -1,0 +1,5 @@
+BEGIN;
+
+ALTER TABLE sector ADD COLUMN IF NOT EXISTS archivado boolean NOT NULL DEFAULT false;
+
+COMMIT;

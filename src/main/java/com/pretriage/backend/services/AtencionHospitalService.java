@@ -8,6 +8,8 @@ import com.pretriage.backend.controllers.dtos.SalaDTO;
 import com.pretriage.backend.controllers.dtos.TiempoEstimadoArriboHospitalResponse;
 import com.pretriage.backend.controllers.dtos.TiempoEstimadoAtencionResponse;
 import com.pretriage.backend.exceptions.AtencionEnCursoException;
+import com.pretriage.backend.exceptions.ChatFinalizadoException;
+import com.pretriage.backend.exceptions.PacienteSancionadoException;
 import com.pretriage.backend.model.chat.Chat;
 import com.pretriage.backend.model.consultas.ConsultaMedica;
 import com.pretriage.backend.model.consultas.EstadoConsulta;
@@ -19,8 +21,11 @@ import com.pretriage.backend.model.hospitales.Sala;
 import com.pretriage.backend.model.hospitales.Sector;
 import com.pretriage.backend.model.personas.Paciente;
 import com.pretriage.backend.repositories.RepoConsultasMedicas;
+import com.pretriage.backend.repositories.RepoEntradasCola;
 import com.pretriage.backend.repositories.RepoEspecialidadesMedicas;
 import com.pretriage.backend.repositories.RepoHospitales;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -53,6 +58,7 @@ public class AtencionHospitalService {
             EstadoConsulta.PRETRIAGE_FINALIZADO,
             EstadoConsulta.PRETRIAGE_EN_PROCESO,
             EstadoConsulta.EN_COLA,
+            EstadoConsulta.EN_REVISION,
             EstadoConsulta.LLAMADO,
             EstadoConsulta.EN_ESPERA,
             EstadoConsulta.ATRASADO,
@@ -72,21 +78,27 @@ public class AtencionHospitalService {
             EstadoConsulta.PRETRIAGE_EN_PROCESO,
             EstadoConsulta.PRETRIAGE_FINALIZADO,
             EstadoConsulta.EN_COLA,
+            EstadoConsulta.EN_REVISION,
             EstadoConsulta.LLAMADO,
             EstadoConsulta.EN_ESPERA,
             EstadoConsulta.ATRASADO,
             EstadoConsulta.EN_ATENCION);
 
     private final RepoConsultasMedicas repoConsultasMedicas;
+    private final RepoEntradasCola repoEntradasCola;
     private final RepoHospitales repoHospitales;
     private final RepoEspecialidadesMedicas repoEspecialidadesMedicas;
 
     private final EstimacionAtencionService estimacionAtencionService;
     private final IngresoColaService ingresoColaService;
     private final AsignacionSectorService asignacionSectorService;
+    private final DiscrepanciaSintomasService discrepanciaSintomasService;
 
     private final PacienteService pacienteService;
     private final GooglePlacesService googlePlacesService;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     public List<HospitalCercanoDTO> buscarHospitalesCercanos(Double latitud, Double longitud, String codigoEspecialidad,
             String transporte, String auth0Id) {
@@ -238,6 +250,7 @@ public class AtencionHospitalService {
     @Transactional
     public void seleccionarHospital(String auth0Id, String placeId, String codigoEspecialidad) {
         Paciente paciente = this.obtenerPaciente(auth0Id);
+        validarNuevoIngresoDigital(paciente);
         EspecialidadMedica especialidad = obtenerEspecialidad(codigoEspecialidad);
         ConsultaMedica consultaMedica = obtenerOCrearConsultaParaSeleccionarHospital(paciente);
 
@@ -279,6 +292,13 @@ public class AtencionHospitalService {
         consultaMedicaNueva.setFechaHoraCreacion(LocalDateTime.now());
         consultaMedicaNueva.setNivelDeGravedadBot(NivelDeGravedad.NORMAL);
         return consultaMedicaNueva;
+    }
+
+    private void validarNuevoIngresoDigital(Paciente paciente) {
+        var sancion = discrepanciaSintomasService.estadoParaIngresoDigital(paciente);
+        if (sancion.vigente()) {
+            throw new PacienteSancionadoException(sancion);
+        }
     }
 
     @Transactional
@@ -327,14 +347,34 @@ public class AtencionHospitalService {
      * generó (si se informa) e ingresa al paciente a la cola con la gravedad estimada por el bot.
      * Un {@code chat} null deja la consulta sin vínculo (cuenta como pretriage no realizado).
      */
-    @Transactional
+    @Transactional(dontRollbackOn = PacienteSancionadoException.class)
     public TiempoEstimadoAtencionResponse finalizarTriageEIngresarACola(
             String auth0Id, NivelDeGravedad nivelDeGravedadBot, String resumenPretriageJson, Chat chat) {
         Paciente paciente = this.obtenerPaciente(auth0Id);
         ConsultaMedica consultaMedica = obtenerConsultaConHospitalSeleccionado(paciente);
+        if (chat != null && chat.getConsultaOrigenId() == null) {
+            // Los chats legados no llegan con la consulta de origen bloqueada.
+            consultaMedica = repoConsultasMedicas.findByIdForUpdate(consultaMedica.getId())
+                    .orElseThrow(ChatFinalizadoException::new);
+            entityManager.refresh(consultaMedica);
+            if (!ESTADOS_CONSULTA_CON_HOSPITAL.contains(consultaMedica.getEstadoConsulta())) {
+                throw new ChatFinalizadoException();
+            }
+        }
+        boolean enAtencion = consultaMedica.getEstadoConsulta() == EstadoConsulta.EN_REVISION
+                || consultaMedica.getEstadoConsulta() == EstadoConsulta.LLAMADO
+                || consultaMedica.getEstadoConsulta() == EstadoConsulta.EN_ATENCION;
+        if (!enAtencion && !repoEntradasCola.existsByConsultaMedicaId(consultaMedica.getId())) {
+            validarNuevoIngresoDigital(paciente);
+        }
         consultaMedica.setResumenPretriageJson(resumenPretriageJson);
         if (chat != null) {
             consultaMedica.setChat(chat);
+        }
+        if (enAtencion) {
+            consultaMedica.setNivelDeGravedadBot(nivelDeGravedadBot);
+            repoConsultasMedicas.save(consultaMedica);
+            return null;
         }
         repoConsultasMedicas.save(consultaMedica);
         return ingresoColaService.ingresar(consultaMedica, nivelDeGravedadBot);

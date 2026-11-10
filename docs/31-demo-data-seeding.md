@@ -1,5 +1,10 @@
 # Carga de datos para la demo
 
+Los seeds del backend mantienen los nombres de catálogo con tildes; la
+migración `scripts/migrations/20261110_normalizar_nombres_especialidades.sql`
+actualiza únicamente los cinco nombres legacy conocidos, preservando códigos,
+IDs y asociaciones.
+
 `scripts/seed_demo.py` prepara datos de muestra para validar los tableros y los
 flujos de la demo. El 05/11/2026 se aplicó en AWS con `seed_key`
 `demo-caba-v1`, tras renovar la sesión de AWS. La instancia ya estaba encendida

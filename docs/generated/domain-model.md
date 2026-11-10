@@ -26,6 +26,7 @@ python scripts\generate_domain_diagram.py
 - `Credencial`: `src/main/java/com/pretriage/backend/model/hospitales/Credencial.java`
 - `CredencialProfesional`: `src/main/java/com/pretriage/backend/model/personas/CredencialProfesional.java`
 - `Direccion`: `src/main/java/com/pretriage/backend/model/hospitales/Direccion.java`
+- `DiscrepanciaSintomas`: `src/main/java/com/pretriage/backend/model/consultas/DiscrepanciaSintomas.java`
 - `EntradaCola`: `src/main/java/com/pretriage/backend/model/consultas/EntradaCola.java`
 - `EspecialidadMedica`: `src/main/java/com/pretriage/backend/model/hospitales/EspecialidadMedica.java`
 - `EstudioClinico`: `src/main/java/com/pretriage/backend/model/consultas/EstudioClinico.java`
@@ -40,6 +41,7 @@ python scripts\generate_domain_diagram.py
 - `Recepcionista`: `src/main/java/com/pretriage/backend/model/personas/Recepcionista.java`
 - `RevisionPrioridadConsulta`: `src/main/java/com/pretriage/backend/model/consultas/RevisionPrioridadConsulta.java`
 - `Sala`: `src/main/java/com/pretriage/backend/model/hospitales/Sala.java`
+- `SancionDigitalPaciente`: `src/main/java/com/pretriage/backend/model/consultas/SancionDigitalPaciente.java`
 - `Sector`: `src/main/java/com/pretriage/backend/model/hospitales/Sector.java`
 - `SesionAtencionMedica`: `src/main/java/com/pretriage/backend/model/consultas/SesionAtencionMedica.java`
 - `SesionRecepcion`: `src/main/java/com/pretriage/backend/model/recepcion/SesionRecepcion.java`
@@ -78,6 +80,7 @@ erDiagram
         Long id
         EstadoMembresiaHospital estado
         RolMembresiaHospital roles
+        RolMembresiaHospital rolesSuspendidos
         Instant fechaCreacion
         Instant fechaAceptacion
         Instant fechaSuspension
@@ -132,6 +135,14 @@ erDiagram
         String resumenPretriageJson
         EstadoConsulta estadoConsulta
     }
+    DISCREPANCIA_SINTOMAS {
+        Long id
+        String motivo
+        String dni
+        EstadoDiscrepanciaSintomas estado
+        Instant registradaEn
+        Instant anuladaEn
+    }
     ENTRADA_COLA {
         Long id
         EstadoEntradaCola estado
@@ -165,6 +176,17 @@ erDiagram
         NivelDeGravedad prioridadNueva
         String motivo
         LocalDateTime fechaHora
+    }
+    SANCION_DIGITAL_PACIENTE {
+        Long id
+        String dni
+        Instant calculadaEn
+        long cantidadVigentes
+        Instant fechaInicio
+        Instant fechaFin
+        boolean permanente
+        String avisoId
+        TipoAvisoSancion tipoAviso
     }
     SESION_ATENCION_MEDICA {
         Long id
@@ -221,6 +243,7 @@ erDiagram
         Long id
         String nombre
         boolean activa
+        boolean archivado
     }
     ASIGNACION_MEDICO_HOSPITAL {
         Long id
@@ -276,6 +299,9 @@ erDiagram
     ADMISION_RECEPCION {
         Long id
         EstadoAdmisionRecepcion estado
+        Boolean coberturaConfirmada
+        Long credencialCoberturaId
+        String nombreObraSocialCobertura
         String formularioJson
         String resultadoTriageJson
         LocalDateTime fechaHoraInicio
@@ -309,6 +335,8 @@ erDiagram
     CONSULTA_MEDICA }o--|| PACIENTE : paciente
     CONSULTA_MEDICA ||--o{ SINTOMA : sintomasBot
     CONSULTA_MEDICA ||--|| CHAT : chat
+    DISCREPANCIA_SINTOMAS ||--|| ATENCION_MEDICA : atencionMedica
+    DISCREPANCIA_SINTOMAS }o--|| USUARIO_AUTH : anuladaPor
     ENTRADA_COLA }o--|| GESTOR_DE_COLA : gestorDeCola
     ENTRADA_COLA ||--|| CONSULTA_MEDICA : consultaMedica
     ESTUDIO_CLINICO }o--|| PACIENTE : paciente
@@ -319,6 +347,7 @@ erDiagram
     GESTOR_DE_COLA ||--|| SECTOR : sector
     REVISION_PRIORIDAD_CONSULTA }o--|| CONSULTA_MEDICA : consultaMedica
     REVISION_PRIORIDAD_CONSULTA }o--|| MEDICO : medico
+    SANCION_DIGITAL_PACIENTE }o--|| DISCREPANCIA_SINTOMAS : discrepancia
     SESION_ATENCION_MEDICA }o--|| MEDICO : medico
     SESION_ATENCION_MEDICA }o--|| HOSPITAL : hospital
     SESION_ATENCION_MEDICA }o--|| ESPECIALIDAD_MEDICA : especialidad

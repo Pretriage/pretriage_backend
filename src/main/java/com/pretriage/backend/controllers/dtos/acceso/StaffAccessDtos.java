@@ -25,11 +25,14 @@ public final class StaffAccessDtos {
 
     public record MembresiaResponse(Long id, Long hospitalId, String hospitalNombre,
                                     EstadoMembresiaHospital estado,
-                                    Set<RolMembresiaHospital> roles) {}
+                                    Set<RolMembresiaHospital> roles,
+                                    Set<RolMembresiaHospital> rolesSuspendidos,
+                                    Set<RolMembresiaHospital> rolesEfectivos) {}
 
     public record PersonalResponse(Long membresiaId, String nombre, String apellido, String email,
                                    EstadoMembresiaHospital estado,
-                                   Set<RolMembresiaHospital> roles) {}
+                                   Set<RolMembresiaHospital> roles,
+                                   Set<RolMembresiaHospital> rolesSuspendidos) {}
 
     public record HospitalPlataformaResponse(Long id, String nombre,
                                              long administradoresActivos) {}
@@ -72,6 +75,7 @@ public final class StaffAccessDtos {
 
     public record ActualizarMembresiaRequest(@NotNull EstadoMembresiaHospital estado) {}
     public record ActualizarRolesRequest(@NotEmpty Set<RolMembresiaHospital> roles) {}
+    public record ActualizarEstadoRolRequest(@NotNull EstadoMembresiaHospital estado) {}
 
     public record AuditoriaResponse(Long id, Instant fecha, String actor, String accion,
                                     String objetivo, String resultado) {}

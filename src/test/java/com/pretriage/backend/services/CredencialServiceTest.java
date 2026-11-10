@@ -4,6 +4,7 @@ import com.pretriage.backend.controllers.dtos.CredencialRequest;
 import com.pretriage.backend.controllers.dtos.CredencialResponse;
 import com.pretriage.backend.controllers.dtos.ObraSocialDTO;
 import com.pretriage.backend.exceptions.CredencialInvalidaException;
+import com.pretriage.backend.exceptions.CredencialValidaYaExisteException;
 import com.pretriage.backend.exceptions.ObraSocialNoExisteException;
 import com.pretriage.backend.exceptions.ObraSocialYaExisteException;
 import com.pretriage.backend.model.hospitales.Credencial;
@@ -22,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
 
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 
@@ -444,7 +446,7 @@ class CredencialServiceTest {
     }
 
     @Test
-    void recepcionistaPuedeEditarCredencialDePaciente() {
+    void recepcionistaPuedeEditarCredencialDePacienteSinCambiarElNumeroDeAfiliado() {
 
         String recepcionistaAuth0Id = "auth0|recepcionista";
 
@@ -461,10 +463,12 @@ class CredencialServiceTest {
 
         ObraSocial obraSocial = new ObraSocial();
         obraSocial.setId(2L);
-        String nombreObraSocial = "OSDE EDITADO";
+        String nombreObraSocial = "OSDE";
         String numeroAfiliado = "999888" ;
         String plan = "777";
         obraSocial.setNombre(nombreObraSocial);
+        credencial.setObraSocial(obraSocial);
+        credencial.setNumeroAfiliado(numeroAfiliado);
 
         CredencialRequest request = new CredencialRequest();
         request.setNombreObraSocial(nombreObraSocial);
@@ -481,6 +485,9 @@ class CredencialServiceTest {
         when(repoCredenciales.findById(1L))
                 .thenReturn(Optional.of(credencial));
 
+        when(repoCredenciales.findByNumeroAfiliadoAndObraSocialNombre(numeroAfiliado, nombreObraSocial))
+                .thenReturn(Optional.of(credencial));
+
         when(repoObraSociales.findByNombreEqualsIgnoreCaseAndVirgenteTrue(nombreObraSocial))
                 .thenReturn(Optional.of(obraSocial));
 
@@ -489,7 +496,52 @@ class CredencialServiceTest {
         assertEquals(nombreObraSocial, credencial.getObraSocial().getNombre());
         assertEquals(numeroAfiliado, credencial.getNumeroAfiliado());
         assertEquals(plan, credencial.getPlan());
+        assertEquals(request.getFechaVencimiento(), credencial.getFechaVencimiento());
         verify(repoCredenciales).save(credencial);
+    }
+
+    @Test
+    void recepcionNoPuedeReutilizarElNumeroDeOtraCredencialDeLaMismaObraSocial() {
+        Paciente paciente = new Paciente();
+        paciente.setId(1L);
+        Credencial credencialEditada = new Credencial();
+        credencialEditada.setId(2L);
+        credencialEditada.setPaciente(paciente);
+        Credencial credencialExistente = new Credencial();
+        credencialExistente.setId(3L);
+        CredencialRequest request = new CredencialRequest();
+        request.setNombreObraSocial("OSDE");
+        request.setNumeroAfiliado("123456");
+        request.setFechaVencimiento(LocalDate.now(ZoneId.of("America/Argentina/Buenos_Aires")).plusDays(1));
+        when(recepcionistaService.esRecepcionistaConUsuarioId("recepcion")).thenReturn(true);
+        when(pacienteService.obtenerPaciente(1L)).thenReturn(paciente);
+        when(repoCredenciales.findById(2L)).thenReturn(Optional.of(credencialEditada));
+        when(repoCredenciales.findByNumeroAfiliadoAndObraSocialNombre("123456", "OSDE"))
+                .thenReturn(Optional.of(credencialExistente));
+
+        assertThrows(CredencialValidaYaExisteException.class,
+                () -> service.editarCredencialRecepcionista(2L, 1L, "recepcion", request));
+        verify(repoCredenciales, never()).save(any());
+    }
+
+    @Test
+    void recepcionNoPuedeCargarNiEditarUnaCredencialConVencimientoDeHoy() {
+        Paciente paciente = new Paciente();
+        paciente.setId(1L);
+        Credencial credencial = new Credencial();
+        credencial.setId(2L);
+        credencial.setPaciente(paciente);
+        CredencialRequest request = new CredencialRequest();
+        request.setFechaVencimiento(LocalDate.now(ZoneId.of("America/Argentina/Buenos_Aires")));
+        when(recepcionistaService.esRecepcionistaConUsuarioId("recepcion")).thenReturn(true);
+        when(pacienteService.obtenerPaciente(1L)).thenReturn(paciente);
+        when(repoCredenciales.findById(2L)).thenReturn(Optional.of(credencial));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.cargarCredencialRecepcionista("recepcion", 1L, request));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.editarCredencialRecepcionista(2L, 1L, "recepcion", request));
+        verify(repoCredenciales, never()).save(any());
     }
 
     @Test

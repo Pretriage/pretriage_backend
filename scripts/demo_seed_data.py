@@ -20,11 +20,11 @@ else:
 
 
 SPECIALTIES: tuple[tuple[str, str], ...] = (
-    ("CLINICA_MEDICA", "Clinica medica"),
-    ("PEDIATRIA", "Pediatria"),
-    ("CARDIOLOGIA", "Cardiologia"),
-    ("TRAUMATOLOGIA", "Traumatologia"),
-    ("GINECOLOGIA", "Ginecologia"),
+    ("CLINICA_MEDICA", "Clínica médica"),
+    ("PEDIATRIA", "Pediatría"),
+    ("CARDIOLOGIA", "Cardiología"),
+    ("TRAUMATOLOGIA", "Traumatología"),
+    ("GINECOLOGIA", "Ginecología"),
 )
 
 _PRIORITY_BY_SEVERITY = {

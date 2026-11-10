@@ -1,6 +1,7 @@
 package com.pretriage.backend.services;
 
 import com.pretriage.backend.controllers.dtos.TiempoEstimadoAtencionResponse;
+import com.pretriage.backend.exceptions.ConflictoDeEstadoException;
 import com.pretriage.backend.model.consultas.*;
 import com.pretriage.backend.model.hospitales.Sector;
 import com.pretriage.backend.repositories.RepoConsultasMedicas;
@@ -38,15 +39,22 @@ public class IngresoColaService {
         if (consulta.getSector() == null) {
             throw new NoSuchElementException("La consulta debe tener un sector asignado para ingresar a la cola");
         }
+        Sector sector = repoSectores.findByIdForOperationalUse(consulta.getSector().getId())
+                .orElseThrow(() -> new NoSuchElementException("El sector asignado a la consulta no está disponible"));
+        validarSectorOperativo(sector);
+        if (sector.getHospital() == null || !consulta.getHospital().getId().equals(sector.getHospital().getId())
+                || sector.getEspecialidad() == null
+                || !consulta.getEspecialidad().getId().equals(sector.getEspecialidad().getId())) {
+            throw new ConflictoDeEstadoException("El sector no corresponde al hospital y especialidad de la consulta");
+        }
+        consulta.setSector(sector);
         consulta.setNivelDeGravedadBot(prioridad);
         consulta.setEstadoConsulta(EstadoConsulta.EN_COLA);
         repoConsultasMedicas.save(consulta);
-        Sector sector = consulta.getSector();
         GestorDeCola gestor = repoGestoresDeColas
                 .findByHospitalIdAndEspecialidadIdAndSectorId(
                         consulta.getHospital().getId(), consulta.getEspecialidad().getId(), sector.getId())
                 .orElseGet(() -> {
-                    verificarQueExiste(sector);
                     GestorDeCola nuevo = new GestorDeCola();
                     nuevo.setHospital(consulta.getHospital());
                     nuevo.setEspecialidad(consulta.getEspecialidad());
@@ -75,9 +83,9 @@ public class IngresoColaService {
         return estimacionAtencionService.calcularPara(consulta);
     }
 
-    private void verificarQueExiste(Sector sector) {
-        if (!repoSectores.existsById(sector.getId())) {
-            throw new NoSuchElementException("El sector asignado a la consulta no existe");
+    private void validarSectorOperativo(Sector sector) {
+        if (sector == null || !sector.isActiva() || sector.isArchivado()) {
+            throw new ConflictoDeEstadoException("El sector está inactivo y no admite nuevas consultas");
         }
     }
 

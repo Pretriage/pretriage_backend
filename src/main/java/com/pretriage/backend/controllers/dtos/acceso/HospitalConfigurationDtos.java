@@ -20,7 +20,8 @@ public final class HospitalConfigurationDtos {
     public record ConfiguracionHospitalResponse(
             List<EspecialidadHospitalResponse> especialidades,
             List<SalaHospitalResponse> salas,
-            List<SectorHospitalResponse> sectores) {}
+            List<SectorHospitalResponse> sectores,
+            List<Long> salasOcupadasIds) {}
 
     public record GuardarSalaRequest(
             @NotBlank @Size(max = 100) String nombre,

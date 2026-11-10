@@ -16,7 +16,18 @@ import java.util.Optional;
 @Repository
 public interface RepoSesionesAtencionMedica extends JpaRepository<SesionAtencionMedica, Long> {
 
+    @Query("""
+            select distinct s.sala.id from SesionAtencionMedica s
+            where s.hospital.id = :hospitalId and s.sala.hospital.id = :hospitalId and s.estado in :estados
+            order by s.sala.id
+            """)
+    List<Long> findSalasOcupadasIds(@Param("hospitalId") Long hospitalId,
+            @Param("estados") Collection<EstadoSesionMedica> estados);
+
     boolean existsByMedicoIdAndEstadoIn(Long idMedico, Collection<EstadoSesionMedica> estados);
+
+    boolean existsByMedicoIdAndHospitalIdAndEstadoIn(
+            Long idMedico, Long hospitalId, Collection<EstadoSesionMedica> estados);
 
     boolean existsBySalaIdAndEstadoIn(Long idSala, Collection<EstadoSesionMedica> estados);
 

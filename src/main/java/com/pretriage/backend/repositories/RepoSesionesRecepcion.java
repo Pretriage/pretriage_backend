@@ -8,6 +8,8 @@ import java.util.Optional;
 
 public interface RepoSesionesRecepcion extends JpaRepository<SesionRecepcion, Long> {
     boolean existsByRecepcionistaIdAndEstado(Long recepcionistaId, EstadoSesionRecepcion estado);
+    boolean existsByRecepcionistaIdAndHospitalIdAndEstado(
+            Long recepcionistaId, Long hospitalId, EstadoSesionRecepcion estado);
     Optional<SesionRecepcion> findByIdAndRecepcionistaUsuarioAuthId(Long id, String auth0Id);
     Optional<SesionRecepcion> findFirstByRecepcionistaUsuarioAuthIdAndEstado(String auth0Id, EstadoSesionRecepcion estado);
 }

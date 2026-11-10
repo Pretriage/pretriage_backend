@@ -17,6 +17,9 @@ import com.pretriage.backend.controllers.dtos.SesionMedicaActualDTO;
 import com.pretriage.backend.controllers.dtos.TriageResultDTO;
 import com.pretriage.backend.exceptions.ConflictoDeEstadoException;
 import com.pretriage.backend.model.consultas.*;
+import com.pretriage.backend.model.acceso.EstadoMembresiaHospital;
+import com.pretriage.backend.model.acceso.MembresiaHospital;
+import com.pretriage.backend.model.acceso.RolMembresiaHospital;
 import com.pretriage.backend.model.hospitales.EspecialidadMedica;
 import com.pretriage.backend.model.hospitales.Hospital;
 import com.pretriage.backend.model.hospitales.Sala;
@@ -32,6 +35,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 
@@ -44,11 +48,14 @@ public class AtencionMedicoService {
     private static final List<EstadoSesionMedica> SESIONES_RESERVAN_RECURSOS = List.of(
             EstadoSesionMedica.ACTIVA,
             EstadoSesionMedica.PAUSADA);
+    static final List<EstadoEntradaCola> CONSULTAS_TOMADAS = List.of(
+            EstadoEntradaCola.EN_REVISION, EstadoEntradaCola.LLAMADO, EstadoEntradaCola.EN_ATENCION);
 
     private static final int MINUTOS_MAXIMOS_EN_ESPERA = 60;	
 
     private final RepoMedico repoMedico;
     private final RepoHospitales repoHospitales;
+    private final RepoMembresiasHospital repoMembresiasHospital;
     private final RepoEspecialidadesMedicas repoEspecialidadesMedicas;
 
     private final RepoAsignacionesMedicoHospital repoAsignacionesMedicoHospital;
@@ -70,6 +77,10 @@ public class AtencionMedicoService {
     public List<AsignacionMedicoDTO> obtenerAsignaciones(String auth0Id) {
         Medico medico = obtenerMedico(auth0Id);
         return repoAsignacionesMedicoHospital.findByMedicoId(medico.getId()).stream()
+                .filter(a -> a.getHospital() == null || repoMembresiasHospital.findByUsuarioIdAndHospitalId(auth0Id, a.getHospital().getId())
+                        .map(m -> m.getEstado() == EstadoMembresiaHospital.ACTIVA
+                                && m.getRolesEfectivos().contains(RolMembresiaHospital.MEDICO))
+                        .orElse(true))
                 .map(this::mapearAsignacion)
                 .toList();
     }
@@ -94,7 +105,7 @@ public class AtencionMedicoService {
                 .orElse(null);
         ConsultaLlamadaDTO consultaActual = repoEntradasCola
                 .findFirstByConsultaMedicaMedicoUsuarioAuthIdAndEstadoInOrderByFechaHoraLlamadoDesc(
-                        auth0Id, List.of(EstadoEntradaCola.LLAMADO, EstadoEntradaCola.EN_ATENCION))
+                        auth0Id, CONSULTAS_TOMADAS)
                 .map(EntradaCola::getConsultaMedica)
                 .map(this::mapearConsultaLlamada)
                 .orElse(null);
@@ -133,34 +144,49 @@ public class AtencionMedicoService {
                 .toList();
     }
 
+    @Transactional
     public List<EstudioClinicoDTO> obtenerHistorialClinico(String auth0Id, Long pacienteId) {
-        this.obtenerMedico(auth0Id);
+        validarAccesoAlHistorial(auth0Id, pacienteId);
         return this.obtenerHistorialClinicoDe(pacienteId);
     }
 
     public EstudioClinicoDTO obtenerEstudioClinico(String auth0Id, Long pacienteId, Long estudioId) {
-        this.obtenerMedico(auth0Id);
+        validarAccesoAlHistorial(auth0Id, pacienteId);
         return this.obtenerEstudioClinicoDe(pacienteId, estudioId);
     }
 
     public List<EstudioClinicoDTO> obtenerUltimosEstudiosClinicos(String auth0Id, Long pacienteId, int limite) {
-        this.obtenerMedico(auth0Id);
+        validarAccesoAlHistorial(auth0Id, pacienteId);
         return this.obtenerUltimosEstudiosClinicosDe(pacienteId, limite);
     }
 
     public byte[] descargarArchivo(String auth0Id, Long pacienteId, Long estudioId) {
-        this.obtenerMedico(auth0Id);
+        validarAccesoAlHistorial(auth0Id, pacienteId);
         Paciente paciente = pacienteService.obtenerPaciente(pacienteId);
 
         return estudioClinicoService.descargarEstudioClinicoDePaciente(paciente, estudioId);
+    }
+
+    private void validarAccesoAlHistorial(String auth0Id, Long pacienteId) {
+        Medico medico = obtenerMedico(auth0Id);
+        if (!repoAtencionesMedicas.existsByConsultaMedicaPacienteIdAndSesionAtencionMedicaMedicoId(
+                pacienteId, medico.getId())) {
+            throw new AccessDeniedException("No tiene permisos sobre el historial clinico del paciente");
+        }
     }
 
     @Transactional
     public SesionAtencionMedicaDTO iniciarSesion(String auth0Id, Long hospitalId, String codigoEspecialidad,
             Long sectorId, Long salaId) {
         Medico medico = obtenerMedico(auth0Id);
-        Hospital hospital = repoHospitales.findById(hospitalId)
+        Hospital hospital = repoHospitales.findByIdForUpdate(hospitalId)
                 .orElseThrow(() -> new NoSuchElementException("Hospital inexistente"));
+        repoMembresiasHospital.findByUsuarioIdAndHospitalId(auth0Id, hospitalId).ifPresent(membresia -> {
+            if (membresia.getEstado() != EstadoMembresiaHospital.ACTIVA
+                    || !membresia.getRolesEfectivos().contains(RolMembresiaHospital.MEDICO)) {
+                throw new AccessDeniedException("No tenés una membresía activa con rol médico en este hospital");
+            }
+        });
         EspecialidadMedica especialidad = repoEspecialidadesMedicas.findByCodigo(codigoEspecialidad)
                 .orElseThrow(() -> new NoSuchElementException("Especialidad medica inexistente"));
         Sector sector = salaService.obtenerSector(sectorId, hospitalId);
@@ -217,35 +243,93 @@ public class AtencionMedicoService {
     @Transactional
     public ConsultaLlamadaDTO llamarProximo(String auth0Id, Long sesionId) {
         SesionAtencionMedica sesion = obtenerSesionActivaParaActualizar(auth0Id, sesionId);
+        return llamar(tomarProximo(sesion));
+    }
+
+    @Transactional
+    public ConsultaLlamadaDTO seleccionarProximo(String auth0Id, Long sesionId) {
+        SesionAtencionMedica sesion = obtenerSesionActivaParaActualizar(auth0Id, sesionId);
+        EntradaCola entrada = repoEntradasCola.findFirstByConsultaMedicaMedicoUsuarioAuthIdAndEstadoInOrderByFechaHoraLlamadoDesc(
+                        auth0Id, List.of(EstadoEntradaCola.EN_REVISION))
+                .map(reserva -> {
+                    validarConsultaTomadaPorSesion(reserva.getConsultaMedica(), sesion);
+                    return reserva;
+                })
+                .orElseGet(() -> tomarProximo(sesion));
+        return mapearConsultaLlamada(entrada.getConsultaMedica());
+    }
+
+    private EntradaCola tomarProximo(SesionAtencionMedica sesion) {
         validarSinConsultaEnCurso(sesion);
-        GestorDeCola gestorDeCola = repoGestoresDeColas
-                .findByHospitalIdAndEspecialidadIdAndSectorId(
-                        sesion.getHospital().getId(), sesion.getEspecialidad().getId(),
-                        sesion.getSector().getId())
-                .orElseThrow(() -> new NoSuchElementException("No existe cola para la especialidad del sector"));
+        Long gestorId = obtenerGestorDeCola(sesion).getId();
+        EntradaCola entrada;
+        do {
+            Long consultaId = repoEntradasCola
+                    .findIdsConsultaPorOrdenDeCola(gestorId, EstadoEntradaCola.EN_COLA, PageRequest.of(0, 1))
+                    .stream().findFirst()
+                    .orElseThrow(() -> new NoSuchElementException("No hay pacientes en cola"));
+            // El mismo lock serializa la toma, la ausencia manual y la cancelación.
+            entrada = bloquearEntradaDeConsulta(consultaId);
+        } while (entrada.getEstado() != EstadoEntradaCola.EN_COLA);
 
-        EntradaCola entrada = repoEntradasCola
-                .findFirstByGestorDeColaIdAndEstadoOrderByPrioridadDescOrdenRelativoAsc(gestorDeCola.getId(),
-                        EstadoEntradaCola.EN_COLA)
-                .orElseThrow(() -> new NoSuchElementException("No hay pacientes en cola"));
+        ConsultaMedica consulta = entrada.getConsultaMedica();
+        entrada.setEstado(EstadoEntradaCola.EN_REVISION);
+        entrada.setFechaHoraLlamado(null);
+        consulta.setEstadoConsulta(EstadoConsulta.EN_REVISION);
+        consulta.setMedico(sesion.getMedico());
+        consulta.setSala(sesion.getSala());
+        return entrada;
+    }
 
+    @Transactional
+    public ConsultaLlamadaDTO llamarConsulta(String auth0Id, Long sesionId, Long consultaId) {
+        SesionAtencionMedica sesion = obtenerSesionActivaParaActualizar(auth0Id, sesionId);
+        EntradaCola entrada = obtenerEntradaTomadaParaActualizar(sesion, consultaId);
+        if (entrada.getEstado() == EstadoEntradaCola.LLAMADO) {
+            return mapearConsultaLlamada(entrada.getConsultaMedica());
+        }
+        validarEstadoEntrada(entrada, EstadoEntradaCola.EN_REVISION);
+        return llamar(entrada);
+    }
+
+    private ConsultaLlamadaDTO llamar(EntradaCola entrada) {
         ConsultaMedica consulta = entrada.getConsultaMedica();
         entrada.setEstado(EstadoEntradaCola.LLAMADO);
         entrada.setFechaHoraLlamado(LocalDateTime.now());
         consulta.setEstadoConsulta(EstadoConsulta.LLAMADO);
-        consulta.setMedico(sesion.getMedico());
-        consulta.setSala(sesion.getSala());
 
-        repoConsultasMedicas.save(consulta);
-        repoEntradasCola.save(entrada);
         return mapearConsultaLlamada(consulta);
+    }
+
+    @Transactional
+    public ConsultaLlamadaDTO devolverACola(String auth0Id, Long sesionId, Long consultaId) {
+        SesionAtencionMedica sesion = obtenerSesionActivaParaActualizar(auth0Id, sesionId);
+        EntradaCola entrada = obtenerEntradaTomadaParaActualizar(sesion, consultaId);
+        validarEstadoEntrada(entrada, EstadoEntradaCola.EN_REVISION);
+        ConsultaMedica consulta = entrada.getConsultaMedica();
+        entrada.setEstado(EstadoEntradaCola.EN_COLA);
+        consulta.setEstadoConsulta(EstadoConsulta.EN_COLA);
+        consulta.setMedico(null);
+        consulta.setSala(null);
+        return mapearConsultaLlamada(consulta);
+    }
+
+    private EntradaCola obtenerEntradaTomadaParaActualizar(SesionAtencionMedica sesion, Long consultaId) {
+        EntradaCola entrada = bloquearEntradaDeConsulta(consultaId);
+        validarConsultaTomadaPorSesion(entrada.getConsultaMedica(), sesion);
+        return entrada;
+    }
+
+    private EntradaCola bloquearEntradaDeConsulta(Long consultaId) {
+        repoConsultasMedicas.findByIdForUpdate(consultaId)
+                .orElseThrow(() -> new NoSuchElementException("La consulta ya no existe"));
+        return obtenerEntradaDeConsulta(consultaId);
     }
 
     @Transactional
     public ConsultaLlamadaDTO confirmarPresente(String auth0Id, Long sesionId, Long consultaId) {
         SesionAtencionMedica sesion = obtenerSesionActivaParaActualizar(auth0Id, sesionId);
-        EntradaCola entrada = obtenerEntradaDeConsulta(consultaId);
-        validarConsultaTomadaPorSesion(entrada.getConsultaMedica(), sesion);
+        EntradaCola entrada = obtenerEntradaTomadaParaActualizar(sesion, consultaId);
         validarEstadoEntrada(entrada, EstadoEntradaCola.LLAMADO);
 
         ConsultaMedica consulta = entrada.getConsultaMedica();
@@ -265,19 +349,24 @@ public class AtencionMedicoService {
 
     @Transactional
     public PretriajeConsultaDTO obtenerPretriaje(String auth0Id, Long sesionId, Long consultaId) {
-        SesionAtencionMedica sesion = obtenerSesionActivaParaActualizar(auth0Id, sesionId);
+        return mapearPretriaje(obtenerConsultaParaRevision(auth0Id, sesionId, consultaId));
+    }
+
+    ConsultaMedica obtenerConsultaParaRevision(String auth0Id, Long sesionId, Long consultaId) {
+        SesionAtencionMedica sesion = obtenerSesionActiva(auth0Id, sesionId);
         EntradaCola entrada = obtenerEntradaDeConsulta(consultaId);
         validarConsultaTomadaPorSesion(entrada.getConsultaMedica(), sesion);
-        validarEstadoEntrada(entrada, EstadoEntradaCola.EN_ATENCION);
-        return mapearPretriaje(entrada.getConsultaMedica());
+        if (!CONSULTAS_TOMADAS.contains(entrada.getEstado())) {
+            throw new ConflictoDeEstadoException("La consulta no esta disponible para revision");
+        }
+        return entrada.getConsultaMedica();
     }
 
     @Transactional
     public PretriajeConsultaDTO revisarPrioridad(
             String auth0Id, Long sesionId, Long consultaId, RevisionPrioridadRequest request) {
         SesionAtencionMedica sesion = obtenerSesionActivaParaActualizar(auth0Id, sesionId);
-        EntradaCola entrada = obtenerEntradaDeConsulta(consultaId);
-        validarConsultaTomadaPorSesion(entrada.getConsultaMedica(), sesion);
+        EntradaCola entrada = obtenerEntradaTomadaParaActualizar(sesion, consultaId);
         validarEstadoEntrada(entrada, EstadoEntradaCola.EN_ATENCION);
 
         ConsultaMedica consulta = entrada.getConsultaMedica();
@@ -330,8 +419,7 @@ public class AtencionMedicoService {
     @Transactional
     public ConsultaLlamadaDTO marcarAusente(String auth0Id, Long sesionId, Long consultaId) {
         SesionAtencionMedica sesion = obtenerSesionActivaParaActualizar(auth0Id, sesionId);
-        EntradaCola entrada = obtenerEntradaDeConsulta(consultaId);
-        validarConsultaTomadaPorSesion(entrada.getConsultaMedica(), sesion);
+        EntradaCola entrada = obtenerEntradaTomadaParaActualizar(sesion, consultaId);
         validarEstadoEntrada(entrada, EstadoEntradaCola.LLAMADO);
 
         ConsultaMedica consulta = entrada.getConsultaMedica();
@@ -348,8 +436,7 @@ public class AtencionMedicoService {
     @Transactional
     public ConsultaLlamadaDTO finalizarConsulta(String auth0Id, Long sesionId, Long consultaId) {
         SesionAtencionMedica sesion = obtenerSesionActivaParaActualizar(auth0Id, sesionId);
-        EntradaCola entrada = obtenerEntradaDeConsulta(consultaId);
-        validarConsultaTomadaPorSesion(entrada.getConsultaMedica(), sesion);
+        EntradaCola entrada = obtenerEntradaTomadaParaActualizar(sesion, consultaId);
         validarEstadoEntrada(entrada, EstadoEntradaCola.EN_ATENCION);
 
         if (repoRevisionesPrioridadConsulta
@@ -382,7 +469,7 @@ public class AtencionMedicoService {
     private void validarSinConsultaEnCurso(SesionAtencionMedica sesion) {
         boolean consultaTomada = repoEntradasCola.existsByConsultaMedicaMedicoIdAndEstadoIn(
                 sesion.getMedico().getId(),
-                List.of(EstadoEntradaCola.LLAMADO, EstadoEntradaCola.EN_ATENCION));
+                CONSULTAS_TOMADAS);
         if (consultaTomada || repoAtencionesMedicas.existsBySesionAtencionMedicaIdAndEstado(
                 sesion.getId(), EstadoAtencionMedica.EN_CURSO)) {
             throw new IllegalStateException("Debe finalizar o resolver la consulta actual antes de continuar");
@@ -395,13 +482,25 @@ public class AtencionMedicoService {
     }
 
     private SesionAtencionMedica obtenerSesionDelMedico(String auth0Id, Long sesionId) {
-        return repoSesionesAtencionMedica.findByIdAndMedicoUsuarioAuthId(sesionId, auth0Id)
+        SesionAtencionMedica sesion = repoSesionesAtencionMedica.findByIdAndMedicoUsuarioAuthId(sesionId, auth0Id)
                 .orElseThrow(() -> new AccessDeniedException("No tiene permisos sobre la sesion"));
+        if (sesion.getHospital() != null) exigirRolMedicoEnHospital(auth0Id, sesion.getHospital().getId());
+        return sesion;
     }
 
     private SesionAtencionMedica obtenerSesionDelMedicoParaActualizar(String auth0Id, Long sesionId) {
-        return repoSesionesAtencionMedica.findByIdAndMedicoUsuarioAuthIdForUpdate(sesionId, auth0Id)
+        SesionAtencionMedica sesion = repoSesionesAtencionMedica.findByIdAndMedicoUsuarioAuthIdForUpdate(sesionId, auth0Id)
                 .orElseThrow(() -> new AccessDeniedException("No tiene permisos sobre la sesion"));
+        if (sesion.getHospital() != null) exigirRolMedicoEnHospital(auth0Id, sesion.getHospital().getId());
+        return sesion;
+    }
+
+    private void exigirRolMedicoEnHospital(String auth0Id, Long hospitalId) {
+        Optional<MembresiaHospital> membresia = repoMembresiasHospital.findByUsuarioIdAndHospitalId(auth0Id, hospitalId);
+        if (membresia.isPresent()
+                && (membresia.get().getEstado() != EstadoMembresiaHospital.ACTIVA
+                        || !membresia.get().getRolesEfectivos().contains(RolMembresiaHospital.MEDICO)))
+            throw new AccessDeniedException("No tenés un rol médico activo en este hospital");
     }
 
     private SesionAtencionMedica obtenerSesionActiva(String auth0Id, Long sesionId) {
@@ -467,7 +566,7 @@ public class AtencionMedicoService {
 
     private void validarConsultaTomadaPorSesion(ConsultaMedica consulta, SesionAtencionMedica sesion) {
         if (consulta.getMedico() == null || !consulta.getMedico().getId().equals(sesion.getMedico().getId())) {
-            throw new AccessDeniedException("La consulta no fue llamada por el medico de la sesion");
+            throw new AccessDeniedException("La consulta no esta asignada al medico de la sesion");
         }
         if (consulta.getSala() == null || !consulta.getSala().getId().equals(sesion.getSala().getId())) {
             throw new AccessDeniedException("La consulta no corresponde a la sala de la sesion");
@@ -579,6 +678,9 @@ public class AtencionMedicoService {
 
     private TriageResultDTO leerResumenPretriaje(ConsultaMedica consulta) {
         String resumen = consulta.getResumenPretriageJson();
+        if ((resumen == null || resumen.isBlank()) && consulta.getChat() != null) {
+            resumen = consulta.getChat().getResultadoTriageJson();
+        }
         if (resumen == null || resumen.isBlank()) {
             resumen = repoAdmisionesRecepcion.findByConsultaMedicaId(consulta.getId())
                     .map(admision -> admision.getResultadoTriageJson())
@@ -598,11 +700,11 @@ public class AtencionMedicoService {
         return motivo == null || motivo.isBlank() ? null : motivo.trim();
     }
 
-    @Transactional
-    public List<EstudioClinicoDTO> obtenerHistorialClinicoDe(Long pacienteId) {
+    private List<EstudioClinicoDTO> obtenerHistorialClinicoDe(Long pacienteId) {
         Paciente paciente = pacienteService.obtenerPaciente(pacienteId);
 
         return paciente.getHistorialClinico().stream()
+                .filter(EstudioClinico::isActivo)
                 .map(this::mapearEstudioClinico)
                 .toList();
     }

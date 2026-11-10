@@ -6,7 +6,9 @@ import com.pretriage.backend.exceptions.RecursoNoEncontradoException;
 import com.pretriage.backend.model.acceso.*;
 import com.pretriage.backend.model.hospitales.EspecialidadMedica;
 import com.pretriage.backend.model.hospitales.Hospital;
+import com.pretriage.backend.model.consultas.EstadoSesionMedica;
 import com.pretriage.backend.model.personas.*;
+import com.pretriage.backend.model.recepcion.EstadoSesionRecepcion;
 import com.pretriage.backend.repositories.*;
 import com.pretriage.backend.services.ports.InvitationEmailPort;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +36,8 @@ public class StaffAccessService {
     private final RepoAuditoriasHospital auditorias;
     private final RepoRecepcionistas recepcionistas;
     private final RepoMedico medicos;
+    private final RepoSesionesAtencionMedica sesionesMedicas;
+    private final RepoSesionesRecepcion sesionesRecepcion;
     private final RepoAsignacionesMedicoHospital asignaciones;
     private final RepoEspecialidadesMedicas especialidades;
     private final RepoCredencialesProfesionales credencialesProfesionales;
@@ -46,7 +50,8 @@ public class StaffAccessService {
         migrarAccesosLegados(usuario);
         List<MembresiaResponse> accesos = membresias
                 .findByUsuarioIdAndEstado(subject, EstadoMembresiaHospital.ACTIVA).stream()
-                .map(this::aMembresiaResponse).toList();
+                .filter(m -> !m.getRolesEfectivos().isEmpty())
+                .map(this::aMembresiaContextoResponse).toList();
         return new StaffMeResponse(usuario.getId(), usuario.getNombre(), usuario.getApellido(),
                 usuario.getCorreoElectronico(), usuario.getRol() == RolSistema.ADMIN, accesos);
     }
@@ -56,7 +61,8 @@ public class StaffAccessService {
         exigirAdminHospital(subject, hospitalId);
         return membresias.findByHospitalIdOrderByUsuarioApellidoAscUsuarioNombreAsc(hospitalId).stream()
                 .map(m -> new PersonalResponse(m.getId(), m.getUsuario().getNombre(), m.getUsuario().getApellido(),
-                        m.getUsuario().getCorreoElectronico(), m.getEstado(), Set.copyOf(m.getRoles())))
+                        m.getUsuario().getCorreoElectronico(), m.getEstado(), Set.copyOf(m.getRoles()),
+                        Set.copyOf(m.getRolesSuspendidos())))
                 .toList();
     }
 
@@ -219,15 +225,23 @@ public class StaffAccessService {
     }
 
     private MembresiaResponse aceptar(InvitacionHospital invitacion, UsuarioAuth usuario) {
-        MembresiaHospital membresia = membresias
-                .findByUsuarioIdAndHospitalId(usuario.getId(), invitacion.getHospital().getId())
-                .orElseGet(MembresiaHospital::new);
+        Long hospitalId = invitacion.getHospital().getId();
+        Hospital hospital = bloquearHospital(hospitalId);
+        Optional<MembresiaHospital> membresiaExistente = membresias
+                .findByUsuarioIdAndHospitalId(usuario.getId(), hospitalId);
+        if (membresiaExistente.isPresent()
+                && membresiaExistente.get().getEstado() == EstadoMembresiaHospital.SUSPENDIDA) {
+            throw new ConflictoDeEstadoException(
+                    "La membresía está suspendida. Pedile a la administración del hospital que reactive el acceso explícitamente.");
+        }
+        MembresiaHospital membresia = membresiaExistente.orElseGet(MembresiaHospital::new);
         membresia.setUsuario(usuario);
-        membresia.setHospital(invitacion.getHospital());
+        membresia.setHospital(hospital);
         membresia.setCreadaPor(invitacion.getInvitadaPor());
         membresia.getRoles().addAll(invitacion.getRolesSolicitados());
         membresia.setEstado(EstadoMembresiaHospital.ACTIVA);
         membresia.setFechaAceptacion(Instant.now());
+        membresia.setFechaSuspension(null);
         membresias.save(membresia);
         materializarPerfilesCompatibles(usuario, invitacion);
         invitacion.setEstado(EstadoInvitacionHospital.ACEPTADA);
@@ -242,9 +256,13 @@ public class StaffAccessService {
     @Transactional
     public MembresiaResponse actualizarEstado(String subject, Long hospitalId, Long membresiaId,
             ActualizarMembresiaRequest request) {
+        bloquearHospital(hospitalId);
         UsuarioAuth actor = exigirAdminHospital(subject, hospitalId);
         MembresiaHospital membresia = membresiaDelHospital(membresiaId, hospitalId);
-        protegerUltimoAdmin(membresia, request.estado(), membresia.getRoles());
+        if (request.estado() != EstadoMembresiaHospital.ACTIVA) {
+            protegerSesionesActivas(membresia, Set.of(), true);
+        }
+        protegerUltimoAdmin(membresia, request.estado(), membresia.getRolesEfectivos());
         membresia.setEstado(request.estado());
         membresia.setFechaSuspension(request.estado() == EstadoMembresiaHospital.SUSPENDIDA ? Instant.now() : null);
         membresias.save(membresia);
@@ -256,13 +274,57 @@ public class StaffAccessService {
     @Transactional
     public MembresiaResponse actualizarRoles(String subject, Long hospitalId, Long membresiaId,
             ActualizarRolesRequest request) {
+        bloquearHospital(hospitalId);
         UsuarioAuth actor = exigirAdminHospital(subject, hospitalId);
         MembresiaHospital membresia = membresiaDelHospital(membresiaId, hospitalId);
-        protegerUltimoAdmin(membresia, membresia.getEstado(), request.roles());
+        if (membresia.getEstado() == EstadoMembresiaHospital.ACTIVA) {
+            protegerSesionesActivas(membresia, request.roles(), false);
+        }
+        Set<RolMembresiaHospital> rolesSuspendidos = new LinkedHashSet<>(membresia.getRolesSuspendidos());
+        rolesSuspendidos.retainAll(request.roles());
+        Set<RolMembresiaHospital> efectivosNuevos = new LinkedHashSet<>(request.roles());
+        efectivosNuevos.removeAll(rolesSuspendidos);
+        protegerUltimoAdmin(membresia, membresia.getEstado(), efectivosNuevos);
         membresia.setRoles(new LinkedHashSet<>(request.roles()));
+        membresia.setRolesSuspendidos(rolesSuspendidos);
         membresias.save(membresia);
         auditar(membresia.getHospital(), actor, "MEMBRESIA_ROLES", "membresia:" + membresiaId,
                 request.roles().toString());
+        return aMembresiaResponse(membresia);
+    }
+
+    @Transactional
+    public MembresiaResponse actualizarEstadoRol(String subject, Long hospitalId, Long membresiaId,
+            RolMembresiaHospital rol, ActualizarEstadoRolRequest request) {
+        bloquearHospital(hospitalId);
+        UsuarioAuth actor = exigirAdminHospital(subject, hospitalId);
+        MembresiaHospital membresia = membresiaDelHospital(membresiaId, hospitalId);
+        if (!membresia.getRoles().contains(rol)) {
+            throw new ConflictoDeEstadoException("El rol no está asignado a esta membresía");
+        }
+        if (request.estado() != EstadoMembresiaHospital.ACTIVA
+                && request.estado() != EstadoMembresiaHospital.SUSPENDIDA) {
+            throw new ConflictoDeEstadoException("El estado del rol debe ser ACTIVA o SUSPENDIDA");
+        }
+        boolean suspendiendo = request.estado() == EstadoMembresiaHospital.SUSPENDIDA;
+        boolean yaSuspendido = membresia.getRolesSuspendidos().contains(rol);
+        if (suspendiendo == yaSuspendido) return aMembresiaResponse(membresia);
+
+        Set<RolMembresiaHospital> efectivosNuevos = new LinkedHashSet<>(membresia.getRolesEfectivos());
+        if (suspendiendo) efectivosNuevos.remove(rol);
+        else efectivosNuevos.add(rol);
+
+        if (membresia.getEstado() == EstadoMembresiaHospital.ACTIVA && suspendiendo) {
+            protegerSesionesActivas(membresia, efectivosNuevos, false);
+        }
+        if (rol == RolMembresiaHospital.ADMIN_HOSPITAL && suspendiendo) {
+            protegerUltimoAdmin(membresia, membresia.getEstado(), efectivosNuevos);
+        }
+        if (suspendiendo) membresia.getRolesSuspendidos().add(rol);
+        else membresia.getRolesSuspendidos().remove(rol);
+        membresias.save(membresia);
+        auditar(membresia.getHospital(), actor, "MEMBRESIA_ROL_ESTADO", "membresia:" + membresiaId + ":rol:" + rol,
+                request.estado().name());
         return aMembresiaResponse(membresia);
     }
 
@@ -292,37 +354,99 @@ public class StaffAccessService {
 
     public UsuarioAuth exigirAdminHospital(String subject, Long hospitalId) {
         UsuarioAuth usuario = usuario(subject);
-        migrarAccesosLegados(usuario);
+        migrarAccesosLegados(usuario, hospitalId);
+        return exigirAdminHospitalSinMigrar(subject, hospitalId);
+    }
+
+    private UsuarioAuth exigirAdminHospitalSinMigrar(String subject, Long hospitalId) {
         MembresiaHospital membresia = membresias.findByUsuarioIdAndHospitalId(subject, hospitalId)
                 .filter(m -> m.getEstado() == EstadoMembresiaHospital.ACTIVA)
-                .filter(m -> m.getRoles().contains(RolMembresiaHospital.ADMIN_HOSPITAL))
+                .filter(m -> m.getRolesEfectivos().contains(RolMembresiaHospital.ADMIN_HOSPITAL))
                 .orElseThrow(() -> new AccessDeniedException("No administrás este hospital"));
         return membresia.getUsuario();
     }
 
     private void migrarAccesosLegados(UsuarioAuth usuario) {
+        migrarAccesosLegados(usuario, null);
+    }
+
+    private void migrarAccesosLegados(UsuarioAuth usuario, Long hospitalIdObjetivo) {
+        Map<Long, Hospital> hospitalesLegados = new TreeMap<>();
+        Map<Long, Set<RolMembresiaHospital>> rolesPorHospital = new TreeMap<>();
         recepcionistas.findRecepcionistaByUsuarioAuthId(usuario.getId()).ifPresent(
                 recepcionista -> hospitales.findByRecepcionistasUsuarioAuthId(usuario.getId()).forEach(hospital -> {
-                    Set<RolMembresiaHospital> roles = new LinkedHashSet<>();
+                    Long hospitalId = hospital.getId();
+                    if (hospitalIdObjetivo != null && !hospitalIdObjetivo.equals(hospitalId)) return;
+                    hospitalesLegados.put(hospitalId, hospital);
+                    Set<RolMembresiaHospital> roles = rolesPorHospital.computeIfAbsent(hospitalId,
+                            ignored -> new LinkedHashSet<>());
                     roles.add(RolMembresiaHospital.RECEPCIONISTA);
-                    if (usuario.getRol() == RolSistema.ADMIN)
-                        roles.add(RolMembresiaHospital.ADMIN_HOSPITAL);
-                    activarLegada(usuario, hospital, roles);
+                    if (usuario.getRol() == RolSistema.ADMIN) roles.add(RolMembresiaHospital.ADMIN_HOSPITAL);
                 }));
-        asignaciones.findByMedicoUsuarioAuthId(usuario.getId()).forEach(
-                asignacion -> activarLegada(usuario, asignacion.getHospital(), Set.of(RolMembresiaHospital.MEDICO)));
+        asignaciones.findByMedicoUsuarioAuthId(usuario.getId()).forEach(asignacion -> {
+            Hospital hospital = asignacion.getHospital();
+            Long hospitalId = hospital.getId();
+            if (hospitalIdObjetivo != null && !hospitalIdObjetivo.equals(hospitalId)) return;
+            hospitalesLegados.put(hospitalId, hospital);
+            rolesPorHospital.computeIfAbsent(hospitalId, ignored -> new LinkedHashSet<>())
+                    .add(RolMembresiaHospital.MEDICO);
+        });
+        hospitalesLegados.forEach((hospitalId, hospital) -> activarLegada(usuario, hospital,
+                rolesPorHospital.get(hospitalId)));
     }
 
     private void activarLegada(UsuarioAuth usuario, Hospital hospital, Set<RolMembresiaHospital> roles) {
-        MembresiaHospital membresia = membresias.findByUsuarioIdAndHospitalId(usuario.getId(), hospital.getId())
-                .orElseGet(MembresiaHospital::new);
+        Optional<MembresiaHospital> existente = membresias.findByUsuarioIdAndHospitalId(usuario.getId(), hospital.getId());
+        if (existente.isPresent()) {
+            return;
+        }
+        Hospital hospitalBloqueado = bloquearHospital(hospital.getId());
+        if (membresias.findByUsuarioIdAndHospitalId(usuario.getId(), hospital.getId()).isPresent()) {
+            return;
+        }
+        MembresiaHospital membresia = new MembresiaHospital();
         membresia.setUsuario(usuario);
-        membresia.setHospital(hospital);
+        membresia.setHospital(hospitalBloqueado);
         membresia.getRoles().addAll(roles);
+        membresia.getRolesSuspendidos().retainAll(membresia.getRoles());
         membresia.setEstado(EstadoMembresiaHospital.ACTIVA);
         if (membresia.getFechaAceptacion() == null)
             membresia.setFechaAceptacion(Instant.now());
         membresias.save(membresia);
+    }
+
+    private Hospital bloquearHospital(Long hospitalId) {
+        return hospitales.findByIdForUpdate(hospitalId)
+                .orElseThrow(() -> new RecursoNoEncontradoException("Hospital inexistente"));
+    }
+
+    private void protegerSesionesActivas(MembresiaHospital membresia,
+            Set<RolMembresiaHospital> rolesConservados, boolean deshabilitarMembresia) {
+        String usuarioId = membresia.getUsuario().getId();
+        Long hospitalId = membresia.getHospital().getId();
+        Set<RolMembresiaHospital> rolesActivos = membresia.getRolesEfectivos();
+        boolean quitarRolMedico = deshabilitarMembresia
+                || rolesActivos.contains(RolMembresiaHospital.MEDICO)
+                        && !rolesConservados.contains(RolMembresiaHospital.MEDICO);
+        boolean quitarRolRecepcion = deshabilitarMembresia
+                || rolesActivos.contains(RolMembresiaHospital.RECEPCIONISTA)
+                        && !rolesConservados.contains(RolMembresiaHospital.RECEPCIONISTA);
+        if (quitarRolMedico
+                && medicos.findByUsuarioAuthId(usuarioId).filter(medico -> sesionesMedicas
+                        .existsByMedicoIdAndHospitalIdAndEstadoIn(medico.getId(), hospitalId,
+                                List.of(EstadoSesionMedica.ACTIVA, EstadoSesionMedica.PAUSADA)))
+                        .isPresent()) {
+            throw new ConflictoDeEstadoException(
+                    "No se puede suspender ni quitar el rol médico mientras haya una sesión médica activa o pausada en este hospital. Cerrá la sesión primero.");
+        }
+        if (quitarRolRecepcion
+                && recepcionistas.findRecepcionistaByUsuarioAuthId(usuarioId)
+                        .filter(recepcionista -> sesionesRecepcion.existsByRecepcionistaIdAndHospitalIdAndEstado(
+                                recepcionista.getId(), hospitalId, EstadoSesionRecepcion.ACTIVA))
+                        .isPresent()) {
+            throw new ConflictoDeEstadoException(
+                    "No se puede suspender ni quitar el rol de recepción mientras haya una sesión de recepción activa en este hospital. Cerrá la sesión primero.");
+        }
     }
 
     private void materializarPerfilesCompatibles(UsuarioAuth usuario, InvitacionHospital invitacion) {
@@ -403,13 +527,19 @@ public class StaffAccessService {
     private void protegerUltimoAdmin(MembresiaHospital membresia, EstadoMembresiaHospital estadoNuevo,
             Set<RolMembresiaHospital> rolesNuevos) {
         boolean dejaDeSerAdmin = membresia.getEstado() == EstadoMembresiaHospital.ACTIVA
-                && membresia.getRoles().contains(RolMembresiaHospital.ADMIN_HOSPITAL)
+                && membresia.getRolesEfectivos().contains(RolMembresiaHospital.ADMIN_HOSPITAL)
                 && (estadoNuevo != EstadoMembresiaHospital.ACTIVA
                         || !rolesNuevos.contains(RolMembresiaHospital.ADMIN_HOSPITAL));
-        if (dejaDeSerAdmin && membresias.countByHospitalIdAndEstadoAndRolesContaining(membresia.getHospital().getId(),
-                EstadoMembresiaHospital.ACTIVA, RolMembresiaHospital.ADMIN_HOSPITAL) <= 1) {
+        if (dejaDeSerAdmin && contarAdminsActivos(membresia.getHospital().getId()) <= 1) {
             throw new ConflictoDeEstadoException("No se puede quitar el último administrador activo del hospital");
         }
+    }
+
+    private long contarAdminsActivos(Long hospitalId) {
+        return membresias.findByHospitalIdOrderByUsuarioApellidoAscUsuarioNombreAsc(hospitalId).stream()
+                .filter(m -> m.getEstado() == EstadoMembresiaHospital.ACTIVA)
+                .filter(m -> m.getRolesEfectivos().contains(RolMembresiaHospital.ADMIN_HOSPITAL))
+                .count();
     }
 
     private InvitacionHospital invitacionValida(String token, boolean exigirPendiente) {
@@ -442,7 +572,14 @@ public class StaffAccessService {
 
     private MembresiaResponse aMembresiaResponse(MembresiaHospital m) {
         return new MembresiaResponse(m.getId(), m.getHospital().getId(), m.getHospital().getNombre(),
-                m.getEstado(), Set.copyOf(m.getRoles()));
+                m.getEstado(), Set.copyOf(m.getRoles()), Set.copyOf(m.getRolesSuspendidos()),
+                Set.copyOf(m.getRolesEfectivos()));
+    }
+
+    private MembresiaResponse aMembresiaContextoResponse(MembresiaHospital m) {
+        Set<RolMembresiaHospital> rolesEfectivos = Set.copyOf(m.getRolesEfectivos());
+        return new MembresiaResponse(m.getId(), m.getHospital().getId(), m.getHospital().getNombre(),
+                m.getEstado(), rolesEfectivos, Set.copyOf(m.getRolesSuspendidos()), rolesEfectivos);
     }
 
     private InvitacionResponse aInvitacionResponse(InvitacionHospital i, Boolean emailEnviado, String token) {

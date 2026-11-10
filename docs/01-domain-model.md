@@ -18,7 +18,7 @@ reception-created patients.
 - `medico`
 - `sala`
 - `sector` (assigned automatically when the patient enters the queue)
-- `chat` (pretriage `Chat` linked when the bot finishes the triage; `null` = pretriage not done)
+- `chat` (optional link to the `Chat` from digital pretriage)
 
 Relevant states in `EstadoConsulta`:
 
@@ -27,6 +27,7 @@ Relevant states in `EstadoConsulta`:
 - `PRETRIAGE_EN_PROCESO`
 - `PRETRIAGE_FINALIZADO`
 - `EN_COLA`
+- `EN_REVISION` (assigned to a doctor and room before the call)
 - `LLAMADO`
 - `EN_ESPERA`
 - `ATRASADO`
@@ -43,7 +44,7 @@ Relevant states in `EstadoConsulta`:
 - `fechaHoraCreacion`
 - `finalizado`
 - `resultadoTriageJson`
-- `estadoClasificacion` (`NO_SOLICITADA`, `PENDIENTE`, `COMPLETADA`, `FALLIDA`)
+- `estadoClasificacion` (`NO_SOLICITADA`, `PENDIENTE`, `COMPLETADA`, `FALLIDA`, `PARCIAL`)
 - `estadoTurnoTexto` (`SIN_SOLICITAR`, `PENDIENTE`, `COMPLETADA`, `NO_DISPONIBLE`),
   `solicitudTurnoTextoId`, `intentosTurnoTexto`: durable state of the latest accepted
   text message, independent of final clinical classification.
@@ -60,11 +61,10 @@ and final-classification recovery lifecycle, see
 
 The structured triage result is stored as JSON in `resultadoTriageJson` and maps
 to `ConsultaMedica.nivelDeGravedadBot` when the triage finishes.
-When the bot finishes the triage, the patient's `ConsultaMedica` is linked to the
-chat through `ConsultaMedica.chat` (`@OneToOne`, FK `consulta_medica.id_chat`, unique;
-unidirectional from the consultation). A consultation without linked chat means the
-chatbot pretriage was not done (reception admission, hospital selection without chat,
-or a chat closed without finishing).
+Digital pretriage links the chat through `ConsultaMedica.chat` (`@OneToOne`, unique FK
+`consulta_medica.id_chat`, unidirectional from the consultation). A
+[partial closure](34-automatic-chat-recovery.md) can also link the chat while leaving
+`resultadoTriageJson` null. Reception admission has its own record in `AdmisionRecepcion`.
 
 `Mensaje` is one chat message. Important fields:
 
@@ -82,8 +82,8 @@ or a chat closed without finishing).
 - `BOT`
 - `PACIENTE`
 
-`ConsultaMedica.sintomasBot` is a many-to-many reference to `Sintoma`, the
-catalog of symptom names identified during triage.
+`ConsultaMedica.sintomasBot` is a unidirectional one-to-many association to `Sintoma`
+through `id_consulta_medica`. Each `Sintoma` stores a symptom name identified during triage.
 
 ## Hospitals And Specialties
 
@@ -91,7 +91,24 @@ catalog of symptom names identified during triage.
 
 `Hospital` has many specialties. A patient can select only hospitals that support the chosen specialty.
 
-`Sector` groups rooms within a hospital for a single specialty. Important fields: `nombre` (unique per hospital, case-insensitive, `@Size(max=100)` trimmed), `activa` (`boolean` default `true`, toggled via `PUT`), `hospital` (`ManyToOne`), `especialidad` (`ManyToOne`), `salas` (`OneToMany(mappedBy=sector)`), `pacientesAsignados` (`OneToMany(mappedBy=sector)`). A specialty can have multiple sectors in the same hospital (e.g., “Clínica Médica – Ala Norte/Sur”). Sectors are managed by `ADMIN_HOSPITAL` via `HospitalConfigurationService` (`POST /sectores` `crearSector`, `PUT /sectores/{sectorId}` `actualizarSector` with `nombre`+`especialidadId`+`activa`, `DELETE /sectores/{sectorId}` `eliminarSector` → `204`) and listed in `GET /configuracion` (`ConfiguracionHospitalResponse.sectores`, `SectorHospitalResponse` with `activa`). Creation requires the specialty to be enabled for the hospital and audits `SECTOR_CREADO`; update audits `SECTOR_ACTUALIZADO` and delete audits `SECTOR_ELIMINADO` and desvincula empty `Sala`s (`sala.setSector(null)`). `PUT` is blocked with `409` if any `Sala` of the sector has `ConsultaMedica` with `estadoConsulta NOT IN (FINALIZADA,CANCELADA)` (`RepoConsultasMedicas.existsBySalaIdInAndEstadoConsultaNotIn`); `DELETE` additionally blocks if any `Sala` has `SesionAtencionMedica` `ACTIVA`/`PAUSADA` (`RepoSesionesAtencionMedica.existsBySalaIdInAndEstadoIn`). Consultation/session assignment is performed by `AsignacionSectorService` and stored in `GestorDeCola(sector)` and `ConsultaMedica.sector`.
+`Sector` groups rooms within a hospital for one specialty. A specialty can have multiple
+sectors in the same hospital. Sector names are trimmed and unique among
+non-archived sectors in a hospital, ignoring case.
+`hospital` and `especialidad` are `ManyToOne`. `salas` maps the inverse side of `Sala.sector`.
+`pacientesAsignados` is a unidirectional `OneToMany` through `id_sector_asignado`.
+
+Under `/api/admin/hospitales/{hospitalId}/configuracion`, `ADMIN_HOSPITAL` can create a sector
+with `POST /sectores` and update or delete it with `PUT` or `DELETE /sectores/{sectorId}`.
+The specialty must be enabled for the hospital. Updates and deletions return `409` when the
+sector or its rooms have unfinished consultations. Deactivation also checks for `ACTIVA` or
+`PAUSADA` sessions and deactivates the sector's rooms. Deletion removes an unused
+sector, its rooms and empty queue manager. For a sector with history, deletion
+sets `archivado=true` and `activa=false`, deactivates its rooms and preserves the
+historical relationships. Both return `204`. Configuration omits archived
+sectors and their rooms. Active assignment and admission exclude them.
+
+`AsignacionSectorService` selects the sector for patient entry. `SesionAtencionMedica` records
+the validated sector and room selected by the doctor at the start of the session.
 
 `Sala` belongs to a hospital, a specialty and a sector (`Sala.sector` `ManyToOne`, assigned at creation). Rooms are managed under `.../configuracion/sectores/{sectorId}/salas` (`POST` `crearSala`, `PUT /salas/{salaId}` `actualizarSala`, `PATCH /salas/{salaId}/estado` `actualizarEstadoSala`); the room's specialty must match the sector's specialty and its name is unique per `hospitalId + sectorId` case-insensitive (`RepoSalas.existsByHospitalIdAndSectorIdAndNombreIgnoreCase` / `existsByHospitalIdAndNombreIgnoreCaseAndSectorIdAndIdNot`). Disabling a specialty is hospital-scoped (`DELETE .../especialidades/{especialidadId}`) and blocked with `409` if the specialty has active rooms anywhere in that hospital, including rooms without a sector (`existsByHospitalIdAndEspecialidadIdAndActivaTrue`); only the hospital-specialty association is removed. A room can be used by one doctor session at a time. `SalaHospitalResponse` exposes `sectorId` and `sectorNombre`.
 
@@ -153,6 +170,7 @@ one-to-one `Direccion`; `Paciente` also keeps a `coordenadaActual`.
 Relevant states in `EstadoEntradaCola`:
 
 - `EN_COLA`
+- `EN_REVISION` (reserved and excluded from queue estimates)
 - `LLAMADO`
 - `EN_ESPERA`
 - `ATRASADO`
@@ -229,6 +247,19 @@ The review state (`PENDIENTE`, `CONFIRMADA`, `CORREGIDA`) is derived from the
 history, not persisted. The current effective value is stored in
 `ConsultaMedica.nivelDeGravedadMedico`.
 
+## Declared Symptom Discrepancy
+
+`DiscrepanciaSintomas` records at most one intentional false declaration per
+`AtencionMedica`. It identifies the patient by DNI and records the reporting
+hospital, doctor, and timestamp. Annulment preserves the record and adds the
+administrator and timestamp.
+
+`SancionDigitalPaciente` records the result of each recalculation by DNI. One
+current report gives six calendar months, two give one calendar year, and
+three or more give an explicit permanent sanction. Temporary terms run from
+the latest current report in the Buenos Aires time zone. Clinical priorities
+and active consultations continue through their regular flows.
+
 ## Reception Admission
 
 `SesionRecepcion` is the receptionist's working session at one assigned
@@ -251,6 +282,9 @@ or use `Chat`. Important fields:
 - `consultaMedica`
 - `sesionRecepcion`
 - `estado`
+- `coberturaConfirmada`, `credencialCoberturaId`, and `nombreObraSocialCobertura` record the
+  admission's coverage choice. The ID and provider are saved as values so later changes to
+  the patient's credentials do not rewrite the admission.
 - `formularioJson`
 - `resultadoTriageJson`
 - `fechaHoraInicio`
@@ -385,7 +419,9 @@ tuple `(medico, hospital, especialidad)` is unique.
 
 Files are stored in AWS S3 through `GestionDeArchivosService`. The entity uses soft delete (`activo = false`) to preserve history while removing from active views. Patients can upload, list, download, and delete their own studies. Doctors can view patient studies during attention.
 
-## Generated Diagram
+## Diagrams
+
+The [PlantUML class diagram](35-class-diagram.puml) groups the Java domain model into an overview and four detailed views. The [diagram guide](35-class-diagram.md) describes the views and shows how to render them.
 
 A Mermaid ER diagram can be generated from the JPA entity classes:
 

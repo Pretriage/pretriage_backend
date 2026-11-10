@@ -1,5 +1,6 @@
 package com.pretriage.backend.exceptions;
 
+import com.pretriage.backend.controllers.dtos.EstadoSancionPacienteDTO;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -7,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.lang.reflect.Method;
+import java.time.Instant;
 import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -88,6 +90,17 @@ class GlobalExceptionHandlerMvcTest {
     }
 
     @Test
+    void informaCodigoYAlcanceDeUnaSancionDigital() throws Exception {
+        mockMvc.perform(get("/regression/patient-sanctioned"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.codigo").value("PATIENT_SANCTIONED"))
+                .andExpect(jsonPath("$.vigente").value(true))
+                .andExpect(jsonPath("$.permanente").value(false))
+                .andExpect(jsonPath("$.fechaFin").value("2027-05-09T17:00:00Z"))
+                .andExpect(jsonPath("$.avisoId").value("sancion-1"));
+    }
+
+    @Test
     void conservaLockedParaCambioDeContraseniaBloqueado() throws Exception {
         mockMvc.perform(get("/regression/locked"))
                 .andExpect(status().isLocked())
@@ -141,6 +154,12 @@ class GlobalExceptionHandlerMvcTest {
         @GetMapping("/regression/forbidden")
         Map<String, String> forbidden() {
             throw new org.springframework.security.access.AccessDeniedException("Sin permiso.");
+        }
+
+        @GetMapping("/regression/patient-sanctioned")
+        void patientSanctioned() {
+            throw new PacienteSancionadoException(new EstadoSancionPacienteDTO(true, false,
+                    Instant.parse("2027-05-09T17:00:00Z"), "sancion-1", null));
         }
 
         @GetMapping("/regression/conflict")

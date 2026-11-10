@@ -19,6 +19,7 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -35,6 +36,7 @@ import java.util.stream.Collectors;
 public class MetricasHospitalService {
 
     static final String SIN_REVISION = "SIN_REVISION";
+    private static final ZoneId ZONA_HOSPITAL = ZoneId.of("America/Argentina/Buenos_Aires");
 
     private final StaffAccessService staffAccessService;
     private final RepoEntradasCola repoEntradasCola;
@@ -50,8 +52,8 @@ public class MetricasHospitalService {
         if (desde.isAfter(hasta)) {
             throw new IllegalArgumentException("La fecha desde no puede ser posterior a la fecha hasta");
         }
-        if (desde.isEqual(hasta)) {
-            throw new IllegalArgumentException("La fecha desde no puede ser igual a la fecha hasta");
+        if (hasta.isAfter(LocalDate.now(ZONA_HOSPITAL))) {
+            throw new IllegalArgumentException("La fecha hasta debe ser hoy o anterior");
         }
 
         LocalDateTime inicio = desde.atStartOfDay();
