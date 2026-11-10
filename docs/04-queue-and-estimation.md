@@ -68,6 +68,7 @@ Only this state counts:
 These states do not count as waiting queue entries:
 
 - `LLAMADO`
+- `EN_REVISION`
 - `EN_ESPERA`
 - `ATRASADO`
 - `EN_ATENCION`

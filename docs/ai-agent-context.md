@@ -187,7 +187,8 @@ values in declaration order plus `SIN_CLASIFICACION_IA`, and `distribucionGraved
 - `Hospital`
 - `EspecialidadMedica`
 - `Sector` (`hospital`+`especialidad` grouping, `activa` default `true`, multiple per specialty, `HospitalConfigurationService.crearSector`/`actualizarSector`/`eliminarSector` + `RepoSectores/RepoSalas/RepoConsultasMedicas/RepoSesionesAtencionMedica` checks `existsBySalaIdIn...`, `SectorHospitalResponse`/`GuardarSectorRequest`/`ActualizarSectorRequest`, listed in `GET /configuracion`, `PUT`/`DELETE` blocked if `Sala` has non-terminal `ConsultaMedica` or `ACTIVA/PAUSADA` session)
-- `AsignacionSectorService` (`asignarSector` picks the active sector with the fewest `EntradaCola.EN_COLA`, ties by name ASC, requires an active room)
+- `Sector.archivado` removes a sector and its rooms from configuration while retaining historical references. Unused sectors are deleted physically. Nonterminal consultations and queue entries and active or paused sessions block deletion.
+- `AsignacionSectorService` (`asignarSector` picks the active, non-archived sector with the fewest `EntradaCola.EN_COLA`, ties by name ASC, requires an active room). Assignment and queue entry share the sector lock with archival.
 - `RepoSectores` (incl. `findByHospitalIdAndEspecialidadIdAndActivaTrueOrderByNombreAsc` for assignment and `findByHospitalIdAndEspecialidadCodigoAndActivaTrueOrderByNombreAsc` for the doctor flow)
 - `RepoHospitales`
 - `RepoEspecialidadesMedicas`
@@ -248,10 +249,18 @@ values in declaration order plus `SIN_CLASIFICACION_IA`, and `distribucionGraved
 - A doctor cannot call another patient while one is called or in attention.
 - `AtencionMedica` is created on presence confirmation and finalized with the consultation.
 - `EN_ESPERA` entries are cancelled after one hour measured from `fechaHoraSalidaTemporal`.
-- A patient can cancel the active hospital selection at any time (`POST /api/paciente/consulta/cancelar`) while its `EntradaCola` is `EN_COLA`, `LLAMADO`, `EN_ESPERA` or `ATRASADO`; cancellation is terminal and idempotent (`CANCELADA` → no-op success).
+- A patient can cancel the active hospital selection (`POST /api/paciente/consulta/cancelar`) while its `EntradaCola` is `EN_COLA`, `EN_ESPERA`, or `ATRASADO`. Cancellation is terminal and idempotent.
 - The cancellation endpoint deterministically resolves the patient's **most recent** `EntradaCola` (`RepoEntradasCola.findFirstByConsultaMedicaPacienteIdOrderByIdDesc`); historical `CANCELADA`/`FINALIZADA` entries from previous selections never shadow the active one.
 - Cancellation marks `EntradaCola.CANCELADA` + `ConsultaMedica.CANCELADA` (clears `medico`/`sala`), excludes the entry from estimation, prevents the doctor from calling or re-seeing the patient, and finalizes an open AI triage chat.
-- `EN_ATENCION` (consultation in progress) and `FINALIZADA` cannot be cancelled (`409 ConflictoDeEstadoException`).
+- `EN_REVISION`, `LLAMADO`, `EN_ATENCION`, and `FINALIZADA` reject cancellation with `409`.
+- The doctor's reservation moves both records to `EN_REVISION`. It is excluded from queue
+  estimates and recovered through the current-session endpoint. A separate call action moves
+  it to `LLAMADO`. Releasing it restores the original queue order.
+- `DiscrepanciaSintomas` records a doctor's confirmed intentional false declaration once per
+  attention. An administrator can annul only a record from their hospital. The current
+  remote registration sanction is the latest `SancionDigitalPaciente` calculation for the DNI,
+  evaluated against the expiration time on read. The gate lives on new digital admissions.
+  Reception, existing consultations, and the independent clinical priority review remain available.
 - Reception admissions are not cancelled by the patient endpoint; they use `AdmisionRecepcionService.cancelar`.
 - SSE subscriptions validate that the authenticated patient owns the consultation.
 

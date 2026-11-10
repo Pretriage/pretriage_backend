@@ -28,6 +28,16 @@ Google Places and routing features. SMTP is optional while invitation email is
 in local handoff mode; for real email, set `PRETRIAGE_INVITATIONS_EMAIL_MODE=smtp`
 and configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
 `SMTP_AUTH`, and `SMTP_STARTTLS` through secrets/configuration.
+Set `PRETRIAGE_INVITATIONS_EMAIL_FROM` to a sender accepted by your relay.
+The demo uses `no-reply@pretriage.com.ar` with Brevo on TCP 587 and STARTTLS.
+An absent sender setting falls back to `no-reply@pretriage.local`. Recreate the
+backend container after changing `.env.aws` so it receives the new setting.
+
+The backend container and JVM use `America/Argentina/Buenos_Aires` (UTC−3).
+Set `TZ` and `JDK_JAVA_OPTIONS` as shown in the runtime example. These settings
+apply to new application timestamps and logs after recreating the backend.
+Historical `timestamp without time zone` values retain their stored wall time.
+PostgreSQL's server setting is separate from the backend timezone.
 
 ## S3 permissions
 
@@ -75,6 +85,12 @@ is disabled because SMTP is an optional feature and may not be configured.
 Multipart upload limits are 10 MiB per file and 12 MiB per request. The Hikari
 connection pool defaults to five connections, with one idle connection, to keep
 small temporary deployments bounded.
+
+The AWS demo overrides the maximum with
+`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=20` in `/opt/pretriage/.env.aws`.
+The pool can grow on demand and still targets one idle connection. CI deployments
+preserve the override. After changing it, recreate the backend container to apply
+the setting.
 
 The profile disables Docker Compose auto-start and DevTools restart. It defaults
 `JPA_DDL_AUTO` to `update` so stopping and restarting a temporary demo does not

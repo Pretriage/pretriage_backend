@@ -8,6 +8,9 @@ import com.pretriage.backend.controllers.dtos.TiempoEstimadoAtencionResponse;
 import com.pretriage.backend.exceptions.ConflictoDeEstadoException;
 import com.pretriage.backend.exceptions.RecursoNoEncontradoException;
 import com.pretriage.backend.model.consultas.*;
+import com.pretriage.backend.model.acceso.EstadoMembresiaHospital;
+import com.pretriage.backend.model.acceso.MembresiaHospital;
+import com.pretriage.backend.model.acceso.RolMembresiaHospital;
 import com.pretriage.backend.model.hospitales.*;
 import com.pretriage.backend.model.personas.*;
 import com.pretriage.backend.model.recepcion.*;
@@ -31,6 +34,7 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class AdmisionRecepcionServiceTest {
     @Mock RepoRecepcionistas repoRecepcionistas; @Mock RepoHospitales repoHospitales;
+    @Mock RepoMembresiasHospital repoMembresiasHospital;
     @Mock RepoSesionesRecepcion repoSesionesRecepcion; @Mock RepoAdmisionesRecepcion repoAdmisionesRecepcion;
     @Mock RepoPacientes repoPacientes; @Mock RepoConsultasMedicas repoConsultasMedicas;
     @Mock RepoDirecciones repoDirecciones;
@@ -65,10 +69,31 @@ class AdmisionRecepcionServiceTest {
     @Test
     void noPermiteDosSesionesActivas() {
         Recepcionista recepcionista = new Recepcionista(); recepcionista.setId(1L);
+        Hospital hospital = new Hospital(); hospital.setId(10L);
         when(repoRecepcionistas.findRecepcionistaByUsuarioAuthId("auth")).thenReturn(Optional.of(recepcionista));
+        when(repoHospitales.findByIdForUpdate(10L)).thenReturn(Optional.of(hospital));
+        when(repoHospitales.findByIdAndRecepcionistasId(10L, 1L)).thenReturn(Optional.of(hospital));
         when(repoSesionesRecepcion.existsByRecepcionistaIdAndEstado(1L, EstadoSesionRecepcion.ACTIVA)).thenReturn(true);
         assertThrows(com.pretriage.backend.exceptions.ConflictoDeEstadoException.class,
                 () -> service.iniciarSesion("auth", 10L));
+    }
+
+    @Test
+    void noIniciaSesionSiMembresiaDelHospitalEstaSuspendida() {
+        Recepcionista recepcionista = new Recepcionista(); recepcionista.setId(1L);
+        Hospital hospital = new Hospital(); hospital.setId(10L);
+        MembresiaHospital membresia = new MembresiaHospital();
+        membresia.setEstado(EstadoMembresiaHospital.SUSPENDIDA);
+        membresia.setRoles(java.util.Set.of(RolMembresiaHospital.RECEPCIONISTA));
+        when(repoRecepcionistas.findRecepcionistaByUsuarioAuthId("auth")).thenReturn(Optional.of(recepcionista));
+        when(repoHospitales.findByIdForUpdate(10L)).thenReturn(Optional.of(hospital));
+        when(repoHospitales.findByIdAndRecepcionistasId(10L, 1L)).thenReturn(Optional.of(hospital));
+        when(repoMembresiasHospital.findByUsuarioIdAndHospitalId("auth", 10L)).thenReturn(Optional.of(membresia));
+
+        assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                () -> service.iniciarSesion("auth", 10L));
+
+        verify(repoSesionesRecepcion, never()).save(any());
     }
 
     @Test

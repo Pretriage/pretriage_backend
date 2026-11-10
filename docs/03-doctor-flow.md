@@ -7,7 +7,9 @@ flowchart TD
     A[Doctor logs in] --> B[Sees assigned hospitals and specialties]
     B --> C[Chooses specialty, sector and room in the selected hospital]
     C --> D[Starts active session]
-    D --> E[Calls next patient from queue]
+    D --> R[Selects next patient for review]
+    R --> E[Reviews pretriage and clinical history, then calls the patient]
+    R -->|Return to queue| D
     E --> F{Patient responds?}
     F -->|Yes| G[Patient enters attention]
     F -->|No| H[Doctor marks absent]
@@ -26,13 +28,13 @@ flowchart TD
   the sector to the same hospital+specialty, or the startup is rejected.
 - A room can be used by one doctor at a time.
 - A doctor can have one active or paused session at a time.
-- After a reload or new login, the active or paused session and any `LLAMADO` or
-  `EN_ATENCION` consultation are recovered from the backend.
+- After a reload or new login, the active or paused session and any `EN_REVISION`,
+  `LLAMADO`, or `EN_ATENCION` consultation are recovered from the backend.
 - A paused session continues reserving the doctor and room, although it does not count as estimation capacity.
 - Hospital configuration cannot deactivate that room or sector while the session
   is active or paused. A room must also be active to appear in the doctor selector.
-- A doctor cannot pause or close a session while a consultation is LLAMADO or EN_ATENCION.
-- A doctor cannot call another patient while a previous patient is still LLAMADO or EN_ATENCION.
+- The doctor must release a reservation or resolve a called or in-progress consultation before
+  pausing, closing the session, or selecting another patient.
 
 ## Session States
 
@@ -58,23 +60,32 @@ that reservation. Finalization preserves the session and clinical/queue history;
 it does not cancel or move queued patients. Repeating a successful close preserves
 the original end time and does not add another audit event.
 
-Closure returns `409` while the doctor has a queue entry in `LLAMADO` or
+Closure returns `409` while the doctor has a queue entry in `EN_REVISION`, `LLAMADO`, or
 `EN_ATENCION`, or the session has an `AtencionMedica.EN_CURSO`. That consultation
 must be resolved through the doctor flow first. Administrative closure and doctor
 operations acquire the same session row lock, then recheck its state, so a
 concurrent patient call cannot continue using a session the administrator closed.
 
-After closure, a sector with history must be deactivated rather than physically
-deleted. Deactivation still requires resolving all pending consultations.
+After closure and resolution of all pending consultations, an administrator can
+delete a sector with history from configuration. Deletion archives the sector
+and its rooms and preserves their historical references.
 
-## Calling Patients
+## Reviewing And Calling Patients
 
-When doctor calls next patient:
+- **Seleccionar siguiente paciente** reserves the first `EntradaCola.EN_COLA` of the session's
+  hospital, specialty, and sector by priority descending, relative order ascending, and
+  entry time ascending. Both records become `EN_REVISION`, assigned to the doctor and room.
+- The reserved patient stops appearing in the available list and queue estimates. The
+  patient app shows that the doctor is reviewing the case.
+- The doctor reads pretriage symptoms and clinical history in the session screen. **Llamar paciente**
+  transitions the selected records to `LLAMADO` and records the call time.
+- The same pretriage summary stays visible while the doctor waits for the patient and
+  after they confirm the patient's presence.
+- **Devolver a la cola** releases the assignment, restores `EN_COLA`, and preserves the previous
+  queue priority, relative order, and entry time.
 
-- Backend selects next `EntradaCola.EN_COLA` for the session hospital/specialty/sector.
-- Ordering is by priority descending and relative order ascending.
-- Entry becomes `LLAMADO`.
-- Consultation also becomes `LLAMADO`.
+Startup updates the PostgreSQL enum checks created by older versions so both
+`entrada_cola.estado` and `consulta_medica.estado_consulta` accept `EN_REVISION`.
 
 If patient appears:
 
@@ -115,6 +126,13 @@ accepts `CONFIRMAR`, or `CORREGIR` with a required different `prioridad` and an
 optional `motivo` of at most 500 characters. Finalization returns `409` while
 the review is pending.
 
+During attention, **Marcar declaración falsa** opens a confirmation dialog for
+an intentional false declaration. Confirming records one discrepancy for the
+assigned doctor and attention. The priority controls remain available. The
+hospital administrator can annul the record from **Discrepancias**, and the
+patient's access to remote registration is recalculated by DNI.
+See [patient flow](02-patient-flow.md#suspensión-de-nuevas-solicitudes-digitales).
+
 ## Queue Visibility And History
 
 - `GET /api/medico/asignaciones` returns the doctor's hospital and specialty assignments.
@@ -124,15 +142,37 @@ the review is pending.
   sector. Changing either parent clears the dependent selections; starting a
   session sends `hospitalId`, `codigoEspecialidad`, `sectorId`, and `salaId`.
 - `GET /api/medico/sesiones/actual` returns the authenticated doctor's active or
-  paused session and their currently called or in-attention consultation, if present.
-- `GET /api/medico/sesiones/{sesionId}/pacientes-disponibles?dni={dni}` lists ordered `EN_COLA` patients for the session hospital and specialty, including the preliminary priority, patient name and surname, document (`numeroDocumento`/`tipoDocumento`) and `estadoConsulta` authorized for the attending doctor. A room is not present until the patient is called. `dni` is optional exact-match filter on `Paciente.numeroDocumento` (trimmed) scoped to the session queue, executed at DB level; blank/missing returns full queue, non-matching returns `[]`.
+  paused session and their reserved, called, or in-attention consultation, if present.
+- `GET /api/medico/sesiones/{sesionId}/pacientes-disponibles` lists ordered `EN_COLA`
+  patients for the session hospital, specialty, and sector with preliminary priority,
+  name, document, and consultation state.
 - `GET /api/medico/atenciones` returns the authenticated doctor's historical attention records.
 
 ## Clinical History Access
 
-When attending patients, doctors can access their medical records:
+The active session's doctor can read patient clinical details and active study
+metadata while the assigned consultation is `EN_REVISION`, `LLAMADO`, or
+`EN_ATENCION`. The data comes from the patient's profile and existing clinical
+history. Both the review and attention screens request it from
+`GET /api/medico/sesiones/{sesionId}/consultas/{consultaId}/datos-clinicos`.
 
-- `GET /api/medico/pacientes/{pacienteId}/historial-clinico` retrieves all medical records (PDFs, images) for a specific patient.
-- `GET /api/medico/pacientes/{pacienteId}/historial-clinico/{estudioId}/archivo` downloads or previews a specific medical record file.
+Opening a study requests
+`GET /api/medico/sesiones/{sesionId}/consultas/{consultaId}/datos-clinicos/estudios/{estudioId}/archivo`.
+The doctor can preview PDF, JPEG, PNG, GIF, WebP, and BMP files. Other file types
+are available by explicit download. The session verifies its assigned
+consultation on every request, and the study must be active and belong to that
+patient.
+Clinical details load independently from file storage. If an attachment is
+unavailable, the doctor can continue reviewing the consultation.
+
+`GET /api/medico/atenciones` lists the authenticated doctor's previous visits
+in hospitals where they retain medical access. The following patient-specific
+endpoints require at least one recorded visit by that doctor for the patient
+in an accessible hospital. An existing hospital membership must be active
+and include the medical role. Legacy visits without a membership row
+continue to qualify:
+
+- `GET /api/medico/pacientes/{pacienteId}/historial-clinico` retrieves active medical records for the patient.
+- `GET /api/medico/pacientes/{pacienteId}/historial-clinico/{estudioId}/archivo` downloads a specific active medical record file.
 - `GET /api/medico/pacientes/{pacienteId}/historial-clinico/{estudioId}/reporte` retrieves structured information about a specific medical record.
 - `GET /api/medico/pacientes/{pacienteId}/ultimos-reportes?limite=5` gets up to `limite` most recent active medical records ordered by `fechaSubida` DESC (`activo=true`; `limite` defaults to `5`; values `< 1` return `400`) for quick triage reference.

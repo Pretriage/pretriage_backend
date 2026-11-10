@@ -99,18 +99,7 @@ public class EstudioClinicoService {
     }
 
     public EstudioClinicoDTO obtenerEstudioClinicoDePaciente(Paciente paciente, Long idEstudioClinico) {
-        Optional<EstudioClinico> opEstudioClinico = this.repoEstudiosClinicos
-                .findByIdAndPacienteAndActivoTrue(idEstudioClinico, paciente);
-
-        if (opEstudioClinico.isEmpty()) {
-            throw new NoSuchElementException(
-                    "No se encontro el estudio clinico con id: " + idEstudioClinico + " para el paciente con id "
-                            + paciente.getId());
-        }
-
-        EstudioClinico estudioClinico = opEstudioClinico.get();
-
-        return this.mappearAEstudioClinicoDTO(estudioClinico);
+        return this.mappearAEstudioClinicoDTO(obtenerEstudioActivo(paciente, idEstudioClinico));
     }
 
     public byte[] descargarEstudioClinico(String auth0Id, Long idEstudioClinico) {
@@ -120,24 +109,29 @@ public class EstudioClinicoService {
     }
 
     public byte[] descargarEstudioClinicoDePaciente(Paciente paciente, Long idEstudioClinico) {
-        Optional<EstudioClinico> opEstudioClinico = this.repoEstudiosClinicos
-                .findByIdAndPacienteAndActivoTrue(idEstudioClinico, paciente);
+        return obtenerArchivoDePaciente(paciente, idEstudioClinico).contenido();
+    }
 
-        if (opEstudioClinico.isEmpty()) {
-            throw new NoSuchElementException(
-                    "No se encontro el estudio clinico con id: " + idEstudioClinico + " para el paciente con id "
-                            + paciente.getId());
-        }
-
-        EstudioClinico estudioClinico = opEstudioClinico.get();
-
+    Archivo obtenerArchivoDePaciente(Paciente paciente, Long idEstudioClinico) {
+        EstudioClinico estudioClinico = obtenerEstudioActivo(paciente, idEstudioClinico);
         String rutaArchivoADescargar = estudioClinico.getRutaArchivo();
 
         if (rutaArchivoADescargar == null) {
             throw new IllegalArgumentException("No se encontra cargada la ruta del archivo");
         }
 
-        return gestionDeArchivosService.descargarArchivoDesdeS3(rutaArchivoADescargar);
+        return new Archivo(estudioClinico.getNombreArchivo(), estudioClinico.getExtensionArchivo(),
+                gestionDeArchivosService.descargarArchivoDesdeS3(rutaArchivoADescargar));
+    }
+
+    private EstudioClinico obtenerEstudioActivo(Paciente paciente, Long idEstudioClinico) {
+        return repoEstudiosClinicos.findByIdAndPacienteAndActivoTrue(idEstudioClinico, paciente)
+                .orElseThrow(() -> new NoSuchElementException(
+                        "No se encontro el estudio clinico con id: " + idEstudioClinico + " para el paciente con id "
+                                + paciente.getId()));
+    }
+
+    public record Archivo(String nombre, String extension, byte[] contenido) {
     }
 
     private EstudioClinico mappearAEtudioClinico(EstudioClinicoDTO dto) {

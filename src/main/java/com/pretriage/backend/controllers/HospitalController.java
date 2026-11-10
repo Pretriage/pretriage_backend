@@ -2,10 +2,14 @@ package com.pretriage.backend.controllers;
 
 import com.pretriage.backend.controllers.dtos.HospitalCercanoDTO;
 import com.pretriage.backend.controllers.dtos.HospitalSeleccionadoResponse;
+import com.pretriage.backend.controllers.dtos.PacienteSancionadoResponse;
 import com.pretriage.backend.controllers.dtos.SeleccionHospitalRequest;
 import com.pretriage.backend.controllers.dtos.TiempoEstimadoArriboHospitalResponse;
 import com.pretriage.backend.controllers.dtos.TiempoEstimadoAtencionResponse;
 import com.pretriage.backend.services.AtencionHospitalService;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -45,6 +49,9 @@ public class HospitalController {
         }
 
         @PostMapping("/api/atencion/hospital")
+        @ApiResponse(responseCode = "204", description = "Ingreso remoto registrado")
+        @ApiResponse(responseCode = "403", description = "Ingreso remoto suspendido",
+                        content = @Content(schema = @Schema(implementation = PacienteSancionadoResponse.class)))
         public ResponseEntity<Void> seleccionarHospital(
                         @AuthenticationPrincipal Jwt jwt,
                         @RequestBody @Valid SeleccionHospitalRequest request) {

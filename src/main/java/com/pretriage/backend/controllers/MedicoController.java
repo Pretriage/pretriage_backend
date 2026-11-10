@@ -160,6 +160,29 @@ public class MedicoController {
         return ResponseEntity.ok(atencionMedicoService.llamarProximo(jwt.getSubject(), sesionId));
     }
 
+    @PostMapping("/api/medico/sesiones/{sesionId}/seleccionar-proximo")
+    public ResponseEntity<ConsultaLlamadaDTO> seleccionarProximo(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long sesionId) {
+        return ResponseEntity.ok(atencionMedicoService.seleccionarProximo(jwt.getSubject(), sesionId));
+    }
+
+    @PostMapping("/api/medico/sesiones/{sesionId}/consultas/{consultaId}/llamar")
+    public ResponseEntity<ConsultaLlamadaDTO> llamarConsulta(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long sesionId,
+            @PathVariable Long consultaId) {
+        return ResponseEntity.ok(atencionMedicoService.llamarConsulta(jwt.getSubject(), sesionId, consultaId));
+    }
+
+    @PostMapping("/api/medico/sesiones/{sesionId}/consultas/{consultaId}/devolver-a-cola")
+    public ResponseEntity<ConsultaLlamadaDTO> devolverACola(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long sesionId,
+            @PathVariable Long consultaId) {
+        return ResponseEntity.ok(atencionMedicoService.devolverACola(jwt.getSubject(), sesionId, consultaId));
+    }
+
     @PostMapping("/api/medico/sesiones/{sesionId}/consultas/{consultaId}/presente")
     public ResponseEntity<ConsultaLlamadaDTO> confirmarPresente(
             @AuthenticationPrincipal Jwt jwt,

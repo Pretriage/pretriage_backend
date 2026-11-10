@@ -5,7 +5,6 @@ import com.pretriage.backend.exceptions.ConflictoDeEstadoException;
 import com.pretriage.backend.exceptions.RecursoNoEncontradoException;
 import com.pretriage.backend.model.acceso.AuditoriaHospital;
 import com.pretriage.backend.model.consultas.EstadoAtencionMedica;
-import com.pretriage.backend.model.consultas.EstadoEntradaCola;
 import com.pretriage.backend.model.consultas.EstadoSesionMedica;
 import com.pretriage.backend.model.consultas.SesionAtencionMedica;
 import com.pretriage.backend.model.hospitales.Sala;
@@ -31,8 +30,6 @@ import java.util.stream.Stream;
 public class SesionesMedicasAdminService {
     private static final List<EstadoSesionMedica> SESIONES_GESTIONABLES = List.of(
             EstadoSesionMedica.ACTIVA, EstadoSesionMedica.PAUSADA);
-    private static final List<EstadoEntradaCola> CONSULTAS_TOMADAS = List.of(
-            EstadoEntradaCola.LLAMADO, EstadoEntradaCola.EN_ATENCION);
 
     private final StaffAccessService staffAccessService;
     private final RepoSectores sectores;
@@ -68,11 +65,11 @@ public class SesionesMedicasAdminService {
             throw new ConflictoDeEstadoException("Solo se pueden cerrar sesiones activas o pausadas");
         }
         if (entradasCola.existsByConsultaMedicaMedicoIdAndEstadoIn(
-                    sesion.getMedico().getId(), CONSULTAS_TOMADAS)
+                    sesion.getMedico().getId(), AtencionMedicoService.CONSULTAS_TOMADAS)
                 || atenciones.existsBySesionAtencionMedicaIdAndEstado(
                     sesionId, EstadoAtencionMedica.EN_CURSO)) {
             throw new ConflictoDeEstadoException(
-                    "No se puede cerrar la sesión mientras tenga una consulta llamada o en atención");
+                    "No se puede cerrar la sesión mientras tenga una consulta en revisión, llamada o en atención");
         }
 
         sesion.setEstado(EstadoSesionMedica.FINALIZADA);

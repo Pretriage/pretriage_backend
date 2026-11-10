@@ -6,6 +6,7 @@ public enum EstadoConsulta {
     PRETRIAGE_FINALIZADO,
     PRETRIAGE_EN_PROCESO,
     EN_COLA,
+    EN_REVISION,
     LLAMADO,
     EN_ESPERA,
     ATRASADO,

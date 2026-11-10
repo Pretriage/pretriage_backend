@@ -45,7 +45,7 @@ class AsignacionSectorServiceTest {
         Sector saturado = sector(5L, "Sector A", hospital, especialidad, true);
         Sector libre = sector(6L, "Sector B", hospital, especialidad, true);
 
-        when(repoSectores.findByHospitalIdAndEspecialidadIdAndActivaTrueOrderByNombreAsc(1L, 2L))
+        when(repoSectores.findSectoresActivosParaAsignacion(1L, 2L))
                 .thenReturn(List.of(saturado, libre));
         when(repoEntradasCola.countByGestorDeColaSectorIdAndEstado(5L, EstadoEntradaCola.EN_COLA)).thenReturn(8L);
         when(repoEntradasCola.countByGestorDeColaSectorIdAndEstado(6L, EstadoEntradaCola.EN_COLA)).thenReturn(2L);
@@ -70,7 +70,7 @@ class AsignacionSectorServiceTest {
         Sector conSalasA = sector(7L, "Sector C", hospital, especialidad, true);
         Sector conSalasB = sector(8L, "Sector D", hospital, especialidad, true);
 
-        when(repoSectores.findByHospitalIdAndEspecialidadIdAndActivaTrueOrderByNombreAsc(1L, 2L))
+        when(repoSectores.findSectoresActivosParaAsignacion(1L, 2L))
                 .thenReturn(List.of(inactivo, sinSalasActivas, conSalasA, conSalasB));
         when(repoEntradasCola.countByGestorDeColaSectorIdAndEstado(7L, EstadoEntradaCola.EN_COLA)).thenReturn(2L);
         when(repoEntradasCola.countByGestorDeColaSectorIdAndEstado(8L, EstadoEntradaCola.EN_COLA)).thenReturn(1L);
@@ -92,7 +92,7 @@ class AsignacionSectorServiceTest {
         Sector zeta = sector(5L, "Zona Z", hospital, especialidad, true);
         Sector alfa = sector(6L, "Ala A", hospital, especialidad, true);
 
-        when(repoSectores.findByHospitalIdAndEspecialidadIdAndActivaTrueOrderByNombreAsc(1L, 2L))
+        when(repoSectores.findSectoresActivosParaAsignacion(1L, 2L))
                 .thenReturn(List.of(zeta, alfa));
         when(repoEntradasCola.countByGestorDeColaSectorIdAndEstado(5L, EstadoEntradaCola.EN_COLA)).thenReturn(1L);
         when(repoEntradasCola.countByGestorDeColaSectorIdAndEstado(6L, EstadoEntradaCola.EN_COLA)).thenReturn(1L);
@@ -111,7 +111,7 @@ class AsignacionSectorServiceTest {
         EspecialidadMedica especialidad = new EspecialidadMedica();
         especialidad.setId(2L);
 
-        when(repoSectores.findByHospitalIdAndEspecialidadIdAndActivaTrueOrderByNombreAsc(1L, 2L))
+        when(repoSectores.findSectoresActivosParaAsignacion(1L, 2L))
                 .thenReturn(List.of());
 
         ConsultaMedica consulta = new ConsultaMedica();
@@ -141,7 +141,7 @@ class AsignacionSectorServiceTest {
 
         Sector sector = sector(5L, "Sector A", hospital, especialidad, true);
 
-        when(repoSectores.findByHospitalIdAndEspecialidadIdAndActivaTrueOrderByNombreAsc(1L, 2L))
+        when(repoSectores.findSectoresActivosParaAsignacion(1L, 2L))
                 .thenReturn(List.of(sector));
 
         ConsultaMedica consulta = new ConsultaMedica();

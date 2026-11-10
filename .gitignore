@@ -36,6 +36,7 @@ build/
 .env.aws
 .env.aws.*
 !.env.aws.example
+/.local-test-accounts/
 infra/aws/certs/
 /certs/
 /data/

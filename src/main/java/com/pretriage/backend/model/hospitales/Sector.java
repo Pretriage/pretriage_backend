@@ -5,6 +5,7 @@ import java.util.List;
 
 import com.pretriage.backend.model.personas.Paciente;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -14,6 +15,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.ColumnDefault;
 
 @Getter
 @Setter
@@ -27,6 +29,10 @@ public class Sector {
     private String nombre;
 
     private boolean activa = true;
+
+    @Column(nullable = false)
+    @ColumnDefault("false")
+    private boolean archivado;
 
     @ManyToOne
     @JoinColumn(name = "id_hospital", referencedColumnName = "id")

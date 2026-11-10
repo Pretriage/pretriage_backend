@@ -5,11 +5,11 @@ import sys
 
 
 SPECIALTIES = (
-    ('CLINICA_MEDICA', 'Clinica medica'),
-    ('PEDIATRIA', 'Pediatria'),
-    ('CARDIOLOGIA', 'Cardiologia'),
-    ('TRAUMATOLOGIA', 'Traumatologia'),
-    ('GINECOLOGIA', 'Ginecologia'),
+    ('CLINICA_MEDICA', 'Clínica médica'),
+    ('PEDIATRIA', 'Pediatría'),
+    ('CARDIOLOGIA', 'Cardiología'),
+    ('TRAUMATOLOGIA', 'Traumatología'),
+    ('GINECOLOGIA', 'Ginecología'),
 )
 
 

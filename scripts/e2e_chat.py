@@ -474,7 +474,7 @@ def main():
     parser.add_argument("--sector-name", default=os.environ.get("E2E_SECTOR_NAME", "Sector E2E Chat"))
     parser.add_argument("--room-name", default=os.environ.get("E2E_ROOM_NAME", "Sala E2E Chat"))
     parser.add_argument("--specialty", default=os.environ.get("E2E_ESPECIALIDAD", "CLINICA_MEDICA"))
-    parser.add_argument("--specialty-name", default=os.environ.get("E2E_ESPECIALIDAD_NOMBRE", "Clinica medica"))
+    parser.add_argument("--specialty-name", default=os.environ.get("E2E_ESPECIALIDAD_NOMBRE", "Clínica médica"))
     parser.add_argument("--gemini-model", help="Override GEMINI_CHAT_MODEL for the availability precheck")
     parser.add_argument("--skip-gemini-check", action="store_true")
     parser.add_argument("--message", action="append", dest="messages", help="Message to send. Repeat to override defaults.")

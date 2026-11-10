@@ -72,6 +72,21 @@ class ChatClasificacionCierreTest {
         verify(ia, times(1)).consultarCorreccionFinal(anyString(), anyString(), any());
         verifyNoInteractions(cola);
     }
+
+    @Test void conservaLaRecomendacionUrgenteSiLaSancionImpideAbrirUnaEntradaLegada() {
+        when(ia.consultar(anyString(), anyString(), eq(true)))
+                .thenReturn(result(4, true, List.of("dolor toracico"), List.of()));
+        when(cola.finalizarTriageEIngresarACola(eq("patient"), any(), anyString(), same(chat)))
+                .thenThrow(new PacienteSancionadoException(
+                        new EstadoSancionPacienteDTO(true, true, null, null, null)));
+
+        service.enviarMensaje("1", "patient", "Tengo dolor de pecho");
+
+        assertEquals(EstadoClasificacionChat.COMPLETADA, chat.getEstadoClasificacion());
+        String respuesta = chat.getMensajes().getLast().getContenido();
+        assertTrue(respuesta.contains("Acudir a una guardia"));
+        assertTrue(respuesta.contains("recepción del hospital"));
+    }
     @Test void ningunaNoSePersisteComoAlergiaYSePideCorreccion() {
         when(ia.consultar(anyString(), anyString(), eq(true))).thenReturn(result(4, true, List.of("dolor toracico"), List.of("Ninguna")));
         when(ia.consultarCorreccionFinal(anyString(), anyString(), any())).thenReturn(result(4, true, List.of("dolor toracico"), List.of()));

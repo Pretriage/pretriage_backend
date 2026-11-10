@@ -36,6 +36,19 @@ public class MembresiaHospital {
     @Enumerated(EnumType.STRING)
     private Set<RolMembresiaHospital> roles = new LinkedHashSet<>();
 
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "membresia_hospital_rol_suspendido", joinColumns = @JoinColumn(name = "membresia_id"))
+    @Column(name = "rol")
+    @Enumerated(EnumType.STRING)
+    private Set<RolMembresiaHospital> rolesSuspendidos = new LinkedHashSet<>();
+
+    @Transient
+    public Set<RolMembresiaHospital> getRolesEfectivos() {
+        Set<RolMembresiaHospital> efectivos = new LinkedHashSet<>(roles);
+        efectivos.removeAll(rolesSuspendidos);
+        return efectivos;
+    }
+
     private Instant fechaCreacion = Instant.now();
     private Instant fechaAceptacion;
     private Instant fechaSuspension;

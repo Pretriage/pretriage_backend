@@ -6,6 +6,9 @@ import com.pretriage.backend.exceptions.ConflictoDeEstadoException;
 import com.pretriage.backend.exceptions.ProveedorIaException;
 import com.pretriage.backend.exceptions.RecursoNoEncontradoException;
 import com.pretriage.backend.model.consultas.*;
+import com.pretriage.backend.model.acceso.EstadoMembresiaHospital;
+import com.pretriage.backend.model.acceso.MembresiaHospital;
+import com.pretriage.backend.model.acceso.RolMembresiaHospital;
 import com.pretriage.backend.model.hospitales.Credencial;
 import com.pretriage.backend.model.hospitales.EspecialidadMedica;
 import com.pretriage.backend.model.hospitales.Direccion;
@@ -24,6 +27,7 @@ import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -33,10 +37,11 @@ public class AdmisionRecepcionService {
     private static final List<EstadoConsulta> ESTADOS_ACTIVOS = List.of(
             EstadoConsulta.PENDIENTE, EstadoConsulta.HOSPITAL_SELECCIONADO,
             EstadoConsulta.PRETRIAGE_EN_PROCESO, EstadoConsulta.PRETRIAGE_FINALIZADO,
-            EstadoConsulta.EN_COLA, EstadoConsulta.LLAMADO, EstadoConsulta.EN_ESPERA,
+            EstadoConsulta.EN_COLA, EstadoConsulta.EN_REVISION, EstadoConsulta.LLAMADO, EstadoConsulta.EN_ESPERA,
             EstadoConsulta.ATRASADO, EstadoConsulta.EN_ATENCION);
     private final RepoRecepcionistas repoRecepcionistas;
     private final RepoHospitales repoHospitales;
+    private final RepoMembresiasHospital repoMembresiasHospital;
     private final RepoSesionesRecepcion repoSesionesRecepcion;
     private final RepoAdmisionesRecepcion repoAdmisionesRecepcion;
     private final RepoPacientes repoPacientes;
@@ -54,6 +59,10 @@ public class AdmisionRecepcionService {
     public List<RecepcionHospitalDTO> obtenerHospitales(String auth0Id) {
         obtenerRecepcionista(auth0Id);
         return repoHospitales.findByRecepcionistasUsuarioAuthId(auth0Id).stream()
+                .filter(h -> repoMembresiasHospital.findByUsuarioIdAndHospitalId(auth0Id, h.getId())
+                        .map(m -> m.getEstado() == EstadoMembresiaHospital.ACTIVA
+                                && m.getRolesEfectivos().contains(RolMembresiaHospital.RECEPCIONISTA))
+                        .orElse(true))
                 .map(h -> new RecepcionHospitalDTO(h.getId(), h.getNombre(), h.getEspecialidades().stream()
                         .map(e -> { EspecialidadMedicaDTO dto = new EspecialidadMedicaDTO(); dto.setCodigo(e.getCodigo()); dto.setNombre(e.getNombre()); return dto; })
                         .toList()))
@@ -62,6 +71,10 @@ public class AdmisionRecepcionService {
 
     public SesionRecepcionDTO obtenerSesionActiva(String auth0Id) {
         return repoSesionesRecepcion.findFirstByRecepcionistaUsuarioAuthIdAndEstado(auth0Id, EstadoSesionRecepcion.ACTIVA)
+                .filter(s -> s.getHospital() == null || repoMembresiasHospital.findByUsuarioIdAndHospitalId(auth0Id, s.getHospital().getId())
+                        .map(m -> m.getEstado() == EstadoMembresiaHospital.ACTIVA
+                                && m.getRolesEfectivos().contains(RolMembresiaHospital.RECEPCIONISTA))
+                        .orElse(true))
                 .map(this::mapear).orElse(null);
     }
 
@@ -91,11 +104,20 @@ public class AdmisionRecepcionService {
 @Transactional
     public SesionRecepcionDTO iniciarSesion(String auth0Id, Long hospitalId) {
         Recepcionista recepcionista = obtenerRecepcionista(auth0Id);
+        repoHospitales.findByIdForUpdate(hospitalId)
+                .orElseThrow(() -> new AccessDeniedException("El recepcionista no esta asignado al hospital"));
+        Hospital hospital = repoHospitales.findByIdAndRecepcionistasId(hospitalId, recepcionista.getId())
+                .orElseThrow(() -> new AccessDeniedException("El recepcionista no esta asignado al hospital"));
+        repoMembresiasHospital.findByUsuarioIdAndHospitalId(auth0Id, hospitalId).ifPresent(membresia -> {
+            if (membresia.getEstado() != EstadoMembresiaHospital.ACTIVA
+                    || !membresia.getRolesEfectivos().contains(RolMembresiaHospital.RECEPCIONISTA)) {
+                throw new AccessDeniedException(
+                        "No tenés una membresía activa con rol de recepción en este hospital");
+            }
+        });
         if (repoSesionesRecepcion.existsByRecepcionistaIdAndEstado(recepcionista.getId(), EstadoSesionRecepcion.ACTIVA)) {
             throw new ConflictoDeEstadoException("El recepcionista ya tiene una sesion activa");
         }
-        Hospital hospital = repoHospitales.findByIdAndRecepcionistasId(hospitalId, recepcionista.getId())
-                .orElseThrow(() -> new org.springframework.security.access.AccessDeniedException("El recepcionista no esta asignado al hospital"));
         SesionRecepcion sesion = new SesionRecepcion();
         sesion.setRecepcionista(recepcionista);
         sesion.setHospital(hospital);
@@ -270,8 +292,18 @@ public class AdmisionRecepcionService {
                 .orElseThrow(() -> new org.springframework.security.access.AccessDeniedException("No tiene permisos de recepcionista"));
     }
     private SesionRecepcion obtenerSesion(String auth0Id, Long id) {
-        return repoSesionesRecepcion.findByIdAndRecepcionistaUsuarioAuthId(id, auth0Id)
+        SesionRecepcion sesion = repoSesionesRecepcion.findByIdAndRecepcionistaUsuarioAuthId(id, auth0Id)
                 .orElseThrow(() -> new org.springframework.security.access.AccessDeniedException("No tiene permisos sobre la sesion"));
+        if (sesion.getHospital() != null) exigirRolRecepcionistaEnHospital(auth0Id, sesion.getHospital().getId());
+        return sesion;
+    }
+
+    private void exigirRolRecepcionistaEnHospital(String auth0Id, Long hospitalId) {
+        Optional<MembresiaHospital> membresia = repoMembresiasHospital.findByUsuarioIdAndHospitalId(auth0Id, hospitalId);
+        if (membresia.isPresent()
+                && (membresia.get().getEstado() != EstadoMembresiaHospital.ACTIVA
+                        || !membresia.get().getRolesEfectivos().contains(RolMembresiaHospital.RECEPCIONISTA)))
+            throw new AccessDeniedException("No tenés un rol de recepción activo en este hospital");
     }
     private SesionRecepcion obtenerSesionActiva(String auth0Id, Long id) {
         SesionRecepcion s = obtenerSesion(auth0Id, id);
@@ -282,20 +314,27 @@ public class AdmisionRecepcionService {
         if (!repoAdmisionesRecepcion.existsById(id)) {
             throw new RecursoNoEncontradoException("Admision inexistente");
         }
-        return repoAdmisionesRecepcion.findByIdAndSesionRecepcionRecepcionistaUsuarioAuthId(id, auth0Id)
+        AdmisionRecepcion admision = repoAdmisionesRecepcion.findByIdAndSesionRecepcionRecepcionistaUsuarioAuthId(id, auth0Id)
                 .orElseThrow(() -> new org.springframework.security.access.AccessDeniedException("No tiene permisos sobre la admision"));
+        if (admision.getSesionRecepcion().getHospital() != null)
+            exigirRolRecepcionistaEnHospital(auth0Id, admision.getSesionRecepcion().getHospital().getId());
+        return admision;
     }
     private AdmisionRecepcion obtenerAdmisionParaModificar(String auth0Id, Long id) {
-        return repoAdmisionesRecepcion.findForUpdateByIdAndSesionRecepcionRecepcionistaUsuarioAuthId(id, auth0Id)
+        AdmisionRecepcion admision = repoAdmisionesRecepcion.findForUpdateByIdAndSesionRecepcionRecepcionistaUsuarioAuthId(id, auth0Id)
                 .orElseThrow(() -> repoAdmisionesRecepcion.existsById(id)
                         ? new AccessDeniedException("No tenés permisos sobre la admisión.")
                         : new RecursoNoEncontradoException("Admisión inexistente."));
+        if (admision.getSesionRecepcion().getHospital() != null)
+            exigirRolRecepcionistaEnHospital(auth0Id, admision.getSesionRecepcion().getHospital().getId());
+        return admision;
     }
 
     private boolean admisionAbierta(AdmisionRecepcion admision) {
         return admision.getEstado() == EstadoAdmisionRecepcion.INICIADA
                 || admision.getEstado() == EstadoAdmisionRecepcion.FORMULARIO_COMPLETO;
     }
+
     private String generarCodigoLlamado() { return "R-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase(); }
     private String escribir(Object valor) { try { return objectMapper.writeValueAsString(valor); } catch (Exception e) { throw new IllegalStateException("No se pudo guardar el formulario", e); } }
     private NivelDeGravedad prioridad(int valor) { return switch (valor) { case 5 -> NivelDeGravedad.RIESGO_VITAL_INMEDIATO; case 4 -> NivelDeGravedad.MUY_URGENTE; case 3 -> NivelDeGravedad.URGENTE; case 2 -> NivelDeGravedad.NORMAL; default -> NivelDeGravedad.NO_URGENTE; }; }

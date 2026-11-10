@@ -38,6 +38,8 @@ A receptionist can admit a patient identified by DNI, collect a structured clini
 ## Rules
 
 - DNI is required and normalized to digits.
+- A patient with a digital registration sanction can enter the queue at reception.
+  The clinical form and priority rules apply as usual.
 - Admissions require name, surname, birth date, biological gender, phone,
   street, street number, city, and province. Floor, email, and postal code are optional; a blank
   email is stored as null.
@@ -111,6 +113,10 @@ metadata, but never the stored clinical form or raw triage JSON. For a finalized
 that remains `EN_COLA`, detail retrieval recalculates the current dynamic estimate. The
 finalization response (`AdmisionRecepcionDTO`) exposes the assigned `sectorId`/`nombreSector`
 and the estimated attention time (`estimacion`, which also carries `sectorId`/`nombreSector`).
+
+Admission detail is available to its owning receptionist while their
+membership in that hospital is active with the reception role. Legacy
+reception access without a membership row continues to work.
 
 Reception endpoints use `400` for validation, `403` for ownership/role violations, `404`
 for missing reception resources, and `409` for active-consultation or invalid-state conflicts.

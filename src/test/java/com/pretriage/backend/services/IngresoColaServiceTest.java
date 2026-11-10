@@ -28,6 +28,7 @@ class IngresoColaServiceTest {
         Hospital hospital = new Hospital(); hospital.setId(1L);
         EspecialidadMedica especialidad = new EspecialidadMedica(); especialidad.setId(2L);
         Sector sector = crearSector(5L, hospital, especialidad);
+        when(repoSectores.findByIdForOperationalUse(5L)).thenReturn(Optional.of(sector));
         ConsultaMedica consulta = new ConsultaMedica(); consulta.setId(3L); consulta.setHospital(hospital); consulta.setEspecialidad(especialidad); consulta.setSector(sector);
         GestorDeCola gestor = new GestorDeCola(); gestor.setId(4L); gestor.setHospital(hospital); gestor.setEspecialidad(especialidad); gestor.setSector(sector);
         when(repoGestoresDeColas.findByHospitalIdAndEspecialidadIdAndSectorId(1L, 2L, 5L)).thenReturn(Optional.of(gestor));
@@ -53,6 +54,7 @@ class IngresoColaServiceTest {
         Hospital hospital = new Hospital(); hospital.setId(1L);
         EspecialidadMedica especialidad = new EspecialidadMedica(); especialidad.setId(2L);
         Sector sector = crearSector(5L, hospital, especialidad);
+        when(repoSectores.findByIdForOperationalUse(5L)).thenReturn(Optional.of(sector));
         ConsultaMedica consulta = new ConsultaMedica(); consulta.setId(3L); consulta.setHospital(hospital); consulta.setEspecialidad(especialidad); consulta.setSector(sector);
         GestorDeCola gestor = new GestorDeCola(); gestor.setId(4L); gestor.setHospital(hospital); gestor.setEspecialidad(especialidad); gestor.setSector(sector);
         EntradaCola existente = new EntradaCola();
@@ -86,7 +88,7 @@ class IngresoColaServiceTest {
         Sector sector = crearSector(5L, hospital, especialidad);
         ConsultaMedica consulta = new ConsultaMedica(); consulta.setId(3L); consulta.setHospital(hospital); consulta.setEspecialidad(especialidad); consulta.setSector(sector);
         when(repoGestoresDeColas.findByHospitalIdAndEspecialidadIdAndSectorId(1L, 2L, 5L)).thenReturn(Optional.empty());
-        when(repoSectores.existsById(5L)).thenReturn(true);
+        when(repoSectores.findByIdForOperationalUse(5L)).thenReturn(Optional.of(sector));
         when(repoGestoresDeColas.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(repoEntradasCola.findByConsultaMedicaId(3L)).thenReturn(Optional.empty());
         when(repoEntradasCola.findFirstByGestorDeColaIdOrderByOrdenRelativoDesc(any())).thenReturn(Optional.empty());
@@ -118,10 +120,39 @@ class IngresoColaServiceTest {
         EspecialidadMedica especialidad = new EspecialidadMedica(); especialidad.setId(2L);
         Sector sector = crearSector(5L, hospital, especialidad);
         ConsultaMedica consulta = new ConsultaMedica(); consulta.setHospital(hospital); consulta.setEspecialidad(especialidad); consulta.setSector(sector);
-        when(repoGestoresDeColas.findByHospitalIdAndEspecialidadIdAndSectorId(1L, 2L, 5L)).thenReturn(Optional.empty());
-        when(repoSectores.existsById(5L)).thenReturn(false);
+        when(repoSectores.findByIdForOperationalUse(5L)).thenReturn(Optional.empty());
 
         assertThrows(NoSuchElementException.class, () -> service.ingresar(consulta, NivelDeGravedad.NORMAL));
+    }
+
+    @Test
+    void noPermiteIngresoEnSectorInactivoOArchivado() {
+        Hospital hospital = new Hospital(); hospital.setId(1L);
+        EspecialidadMedica especialidad = new EspecialidadMedica(); especialidad.setId(2L);
+        Sector sector = crearSector(5L, hospital, especialidad);
+        sector.setActiva(false);
+        ConsultaMedica consulta = new ConsultaMedica(); consulta.setId(3L); consulta.setHospital(hospital);
+        consulta.setEspecialidad(especialidad); consulta.setSector(sector);
+        when(repoSectores.findByIdForOperationalUse(5L)).thenReturn(Optional.of(sector));
+
+        assertThrows(com.pretriage.backend.exceptions.ConflictoDeEstadoException.class,
+                () -> service.ingresar(consulta, NivelDeGravedad.NORMAL));
+        verify(repoConsultasMedicas, never()).save(any());
+    }
+
+    @Test
+    void noPermiteIngresoEnSectorArchivadoAunqueSigaActivoPorDatosInconsistentes() {
+        Hospital hospital = new Hospital(); hospital.setId(1L);
+        EspecialidadMedica especialidad = new EspecialidadMedica(); especialidad.setId(2L);
+        Sector sector = crearSector(5L, hospital, especialidad);
+        sector.setArchivado(true);
+        ConsultaMedica consulta = new ConsultaMedica(); consulta.setId(3L); consulta.setHospital(hospital);
+        consulta.setEspecialidad(especialidad); consulta.setSector(sector);
+        when(repoSectores.findByIdForOperationalUse(5L)).thenReturn(Optional.of(sector));
+
+        assertThrows(com.pretriage.backend.exceptions.ConflictoDeEstadoException.class,
+                () -> service.ingresar(consulta, NivelDeGravedad.NORMAL));
+        verify(repoConsultasMedicas, never()).save(any());
     }
 
     private Sector crearSector(Long id, Hospital hospital, EspecialidadMedica especialidad) {

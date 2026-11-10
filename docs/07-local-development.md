@@ -273,6 +273,54 @@ database and succeeded when repeated. It was then applied to the local
 `pretriage_db` with authorization; its existing chat and all nine messages
 remained intact and the patient foreign key was preserved.
 
+## Migración de discrepancias y sanción digital
+
+En una base PostgreSQL existente, ejecutá la migración antes de iniciar
+el backend actualizado. Para la base local de desarrollo:
+
+```powershell
+Get-Content -Raw scripts/migrations/20261109_discrepancias_sancion_dni.sql | docker exec -i postgre psql -X -U myuser -d pretriage_db -v ON_ERROR_STOP=1 -f -
+```
+
+La migración transaccional e idempotente conserva los reportes y motivos
+anteriores como historial anulado. Los reportes anteriores tenían un
+criterio distinto y quedan fuera del nuevo escalado. La migración crea
+el historial de recálculos por DNI y sus índices. En una base nueva,
+Hibernate crea las tablas directamente.
+
+## Migración de suspensión por rol
+
+En la base local, creá el registro de roles suspendidos antes de iniciar
+el backend actualizado.
+
+```powershell
+Get-Content -Raw scripts/migrations/20261109_membresia_rol_suspendido.sql | docker exec -i postgre psql -X -U myuser -d pretriage_db -v ON_ERROR_STOP=1 -f -
+```
+
+La migración es idempotente. Las membresías existentes conservan su estado y
+sus roles asignados.
+
+## Migración de archivado de sectores
+
+En una base PostgreSQL existente, agregá el estado de archivado antes de
+iniciar el backend actualizado.
+
+```powershell
+Get-Content -Raw scripts/migrations/20261109_archivado_sector.sql | docker exec -i postgre psql -X -U myuser -d pretriage_db -v ON_ERROR_STOP=1 -f -
+```
+
+El valor inicial es `false` para todos los sectores existentes.
+
+## Corrección del catálogo de especialidades
+
+En una base local existente, aplicá la corrección idempotente de los nombres
+del catálogo. La migración conserva los códigos y las asociaciones.
+
+```powershell
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Get-Content -Raw -Encoding UTF8 scripts/migrations/20261110_normalizar_nombres_especialidades.sql | docker exec -i postgre psql -X -U myuser -d pretriage_db -v ON_ERROR_STOP=1 -f -
+```
+
 ## Local Health Insurance Catalog
 
 The [integral demo seed](31-demo-data-seeding.md) already includes this same

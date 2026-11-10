@@ -19,6 +19,7 @@ import org.springframework.security.access.AccessDeniedException;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -252,6 +253,28 @@ class MetricasHospitalServiceTest {
     void rangoInvertidoLanzaIllegalArgument() {
         assertThrows(IllegalArgumentException.class,
                 () -> service.obtenerMetricas(ADMIN, HOSPITAL, HASTA, DESDE));
+        verifyNoInteractions(repoEntradasCola, repoAtencionesMedicas, repoConsultasMedicas);
+    }
+
+    @Test
+    void permiteUnRangoDeUnDiaIncluidoHoyEnArgentina() {
+        LocalDate hoy = LocalDate.now(ZoneId.of("America/Argentina/Buenos_Aires"));
+        LocalDateTime inicio = hoy.atStartOfDay();
+        LocalDateTime fin = hoy.plusDays(1).atStartOfDay();
+        when(repoEntradasCola.findFechasHoraIngresoByHospitalEnRango(HOSPITAL, inicio, fin))
+                .thenReturn(List.of(inicio.plusHours(8)));
+
+        MetricasHospitalResponse resultado = service.obtenerMetricas(ADMIN, HOSPITAL, hoy, hoy);
+
+        assertEquals(1L, resultado.ingresaronACola());
+        assertEquals(List.of(new SerieDiariaItem(hoy, 1L, 0L, null)), resultado.serieDiaria());
+    }
+
+    @Test
+    void rechazaUnaFechaFinalFuturaSinConsultarDatos() {
+        LocalDate futuro = LocalDate.now(ZoneId.of("America/Argentina/Buenos_Aires")).plusDays(2);
+        assertThrows(IllegalArgumentException.class,
+                () -> service.obtenerMetricas(ADMIN, HOSPITAL, DESDE, futuro));
         verifyNoInteractions(repoEntradasCola, repoAtencionesMedicas, repoConsultasMedicas);
     }
 
