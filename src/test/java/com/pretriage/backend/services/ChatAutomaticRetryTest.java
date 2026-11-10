@@ -324,18 +324,18 @@ class ChatAutomaticRetryTest {
         var wrongAmbiguous = envelope(mapper.writeValueAsString(Map.of(
                 "mensaje", "¿Pudiste medir la temperatura?", "estadoEntrada", "AMBIGUO")));
         var correctedIntensity = envelope(mapper.writeValueAsString(Map.of(
-                "mensaje", "¿Qué intensidad tiene el dolor de cabeza?", "estadoEntrada", "RELEVANTE")));
+                "mensaje", "¿Cuánto te duele la cabeza del 1 al 10?", "estadoEntrada", "RELEVANTE")));
         var requests = responderConCaptura(List.of(response(200, wrongAmbiguous),
                 response(200, envelope("{\"valido\":true}")), response(200, correctedIntensity),
                 response(200, envelope("{\"valido\":true}"))));
 
         var result = service().enviarMensaje("7", "patient", "No");
 
-        assertEquals("¿Qué intensidad tiene el dolor de cabeza?", result.respuesta().contenido());
+        assertEquals("¿Cuánto te duele la cabeza del 1 al 10?", result.respuesta().contenido());
         assertEquals(1, chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.PACIENTE
                 && "No".equals(m.getContenido())).count());
         assertEquals(1, chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.BOT
-                && m.getContenido().equals("¿Qué intensidad tiene el dolor de cabeza?")).count());
+                && m.getContenido().equals("¿Cuánto te duele la cabeza del 1 al 10?")).count());
         assertTrue(chat.getMensajes().stream().noneMatch(m -> m.getContenido().equals("¿Pudiste medir la temperatura?")),
                 "AMBIGUO no debe evitar la validación local del objetivo ni persistir la pregunta desviada.");
         assertEquals(4, requests.size());

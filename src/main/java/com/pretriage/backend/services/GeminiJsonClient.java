@@ -23,6 +23,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -92,11 +93,16 @@ public class GeminiJsonClient {
         final URI endpoint;
         final String serializedBody;
         try {
+            Map<String, Object> generationConfig = new HashMap<>();
+            generationConfig.put("maxOutputTokens", properties.maxOutputTokens());
+            generationConfig.put("responseFormat", Map.of("text", Map.of("mimeType", "APPLICATION_JSON", "schema", schema)));
+            if (GeminiChatProperties.GEMINI_3_8_FLASH.equals(model)) {
+                generationConfig.put("thinkingConfig", Map.of("thinkingLevel", "LOW"));
+            }
             Map<String, Object> body = Map.of(
                     "systemInstruction", Map.of("parts", List.of(Map.of("text", systemPrompt))),
                     "contents", List.of(Map.of("role", "user", "parts", List.of(Map.of("text", input)))),
-                    "generationConfig", Map.of("temperature", 0, "maxOutputTokens", properties.maxOutputTokens(),
-                            "responseFormat", Map.of("text", Map.of("mimeType", "APPLICATION_JSON", "schema", schema))));
+                    "generationConfig", generationConfig);
             endpoint = URI.create(properties.baseUrl().replaceAll("/+$", "") + "/models/" + model + ":generateContent");
             serializedBody = mapper.writeValueAsString(body);
         } catch (Exception error) {

@@ -179,8 +179,7 @@ class ChatClasificacionCierreTest {
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
         verify(ia, times(1)).consultar(prompt.capture(), anyString(), eq(true));
         assertTrue(prompt.getValue().contains("Estado de cierre de entrevista: CIERRE_PREVIO"));
-        assertTrue(prompt.getValue().contains("La entrevista ya está cerrada"));
-        assertTrue(prompt.getValue().contains("no hagas nuevas preguntas"));
+        assertTrue(prompt.getValue().contains("Los datos pendientes, desconocidos, rechazados o agotados siguen sin informar"));
         assertFalse(prompt.getValue().contains("Pregunta desde cuándo"));
         assertEquals(EstadoClasificacionChat.COMPLETADA, chat.getEstadoClasificacion());
         assertEquals(1, chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.PACIENTE).count());

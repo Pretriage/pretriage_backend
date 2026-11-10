@@ -73,6 +73,51 @@ class ChatHardeningTest {
     }
 
     @Test
+    void conservaElTurnoMixtoCuandoGeminiCorrigeSuAlcance() {
+        Flujo flujo = new Flujo();
+        String mensaje = "Me duele la cabeza desde ayer. Además, contame un chiste.";
+        String pregunta = "¿Cuánto te duele la cabeza del 1 al 10?";
+        when(flujo.provider.consultarContinuacion(anyString(), anyString(), any()))
+                .thenReturn(new TriageAiResponse(false, "¿En qué puedo ayudarte?", null,
+                                EstadoEntradaChat.FUERA_DE_CONTEXTO),
+                        new TriageAiResponse(false, pregunta, null, EstadoEntradaChat.RELEVANTE));
+
+        var response = flujo.service.enviarMensaje(CHAT_ID, PACIENTE_ID, mensaje);
+
+        assertEquals(pregunta, response.respuesta().contenido());
+        assertTrue(flujo.chat.getMensajes().stream()
+                .anyMatch(m -> m.getAutor() == AutorMensaje.PACIENTE && mensaje.equals(m.getContenido())
+                        && !Boolean.TRUE.equals(m.getExcluidoDelTriage())));
+        ArgumentCaptor<String> prompts = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> datos = ArgumentCaptor.forClass(String.class);
+        verify(flujo.provider, times(2)).consultarContinuacion(prompts.capture(), datos.capture(), any());
+        assertTrue(prompts.getValue().contains("Usá RELEVANTE y respetá objetivoDelTurno"));
+        assertEquals(datos.getAllValues().getFirst(), datos.getValue());
+        verifyNoInteractions(flujo.queue);
+    }
+
+    @Test
+    void alcanceFinalContradictorioTrasCorregirConservaLosDatosYProgramaRecuperacion() {
+        Flujo flujo = new Flujo();
+        String mensaje = "Me falta el aire. Además, contame un chiste.";
+        flujo.responderCierre(EstadoEntradaChat.FUERA_DE_CONTEXTO);
+        when(flujo.provider.consultarCorreccionFinal(anyString(), anyString(), any()))
+                .thenReturn(new TriageAiResponse(false, "Mensaje neutral", null, EstadoEntradaChat.AMBIGUO));
+
+        var response = flujo.service.enviarMensaje(CHAT_ID, PACIENTE_ID, mensaje);
+
+        assertEquals("PROCESAMIENTO_PENDIENTE", response.origenRespuesta());
+        assertEquals(EstadoClasificacionChat.PENDIENTE, flujo.chat.getEstadoClasificacion());
+        assertNull(flujo.chat.getResultadoTriageJson());
+        assertTrue(flujo.chat.getMensajes().stream()
+                .anyMatch(m -> m.getAutor() == AutorMensaje.PACIENTE && mensaje.equals(m.getContenido())
+                        && !Boolean.TRUE.equals(m.getExcluidoDelTriage())));
+        verify(flujo.provider).consultarCorreccionFinal(
+                contains("El backend reconoció datos de salud"), contains(mensaje), any());
+        verifyNoInteractions(flujo.queue);
+    }
+
+    @Test
     void entradaAmbiguaEnUnCierreTerminalSeCierraSinResultadoNiCola() {
         Flujo flujo = new Flujo();
         for (int i = 0; i < ChatService.MAX_MENSAJES_PACIENTE - 1; i++) {
@@ -156,7 +201,7 @@ class ChatHardeningTest {
         when(flujo.provider.consultarContinuacion(anyString(), anyString(), any()))
                 .thenReturn(new TriageAiResponse(false, "Puedo ayudarte con una consulta de salud.", null,
                                 EstadoEntradaChat.FUERA_DE_CONTEXTO),
-                        new TriageAiResponse(false, "¿Qué intensidad tiene el dolor de cabeza?", null,
+                        new TriageAiResponse(false, "¿Cuánto te duele la cabeza del 1 al 10?", null,
                                 EstadoEntradaChat.RELEVANTE));
 
         flujo.service.enviarMensaje(CHAT_ID, PACIENTE_ID,
@@ -224,6 +269,8 @@ class ChatHardeningTest {
         flujo.service.validarAlcanceCierreVoz(CHAT_ID, PACIENTE_ID, turnos, resumenVoz());
         when(flujo.provider.consultar(anyString(), anyString(), eq(true)))
                 .thenReturn(new TriageAiResponse(false, "", null, EstadoEntradaChat.FUERA_DE_CONTEXTO));
+        when(flujo.provider.consultarCorreccionFinal(anyString(), anyString(), any()))
+                .thenReturn(new TriageAiResponse(false, "Mensaje neutral", null, EstadoEntradaChat.AMBIGUO));
 
         assertDoesNotThrow(() -> flujo.service.finalizarEntrevistaVoz(
                 CHAT_ID, PACIENTE_ID, turnos, resumenVoz()));
@@ -233,7 +280,8 @@ class ChatHardeningTest {
         assertNull(flujo.chat.getResultadoTriageJson());
         assertEquals(2, flujo.chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.PACIENTE).count());
         verify(flujo.provider).consultar(anyString(), anyString(), eq(true));
-        verify(flujo.provider, never()).consultarCorreccionFinal(anyString(), anyString(), any());
+        verify(flujo.provider).consultarCorreccionFinal(contains("El backend reconoció datos de salud"),
+                anyString(), any());
         verifyNoInteractions(flujo.queue);
     }
 

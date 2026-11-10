@@ -117,6 +117,7 @@ class GeminiJsonClientTest {
 
     @Test
     void usaHeaderDeAutenticacionPlazoYUnaSolaPeticion() throws Exception {
+        client = client(properties("test-key", null));
         when(response.statusCode()).thenReturn(200);
         when(response.body()).thenReturn("""
                 {"candidates":[{"finishReason":"STOP","content":{"parts":[
@@ -127,7 +128,8 @@ class GeminiJsonClientTest {
         ArgumentCaptor<HttpRequest> request = ArgumentCaptor.forClass(HttpRequest.class);
         verify(http, times(1)).send(request.capture(), any());
         assertEquals("test-key", request.getValue().headers().firstValue("x-goog-api-key").orElseThrow());
-        assertFalse(request.getValue().uri().toString().contains("test-key"));
+        assertEquals("https://example.invalid/v1beta/models/gemini-3.8-flash:generateContent",
+                request.getValue().uri().toString());
         assertEquals(Duration.ofSeconds(2), request.getValue().timeout().orElseThrow());
         assertEquals("POST", request.getValue().method());
         var subscriber = HttpResponse.BodySubscribers.ofString(java.nio.charset.StandardCharsets.UTF_8);
@@ -141,8 +143,11 @@ class GeminiJsonClientTest {
                     public void onComplete() { subscriber.onComplete(); }
                 });
         var body = mapper.readTree(subscriber.getBody().toCompletableFuture().join());
-        var format = body.path("generationConfig").path("responseFormat").path("text");
-        assertEquals(8192, body.path("generationConfig").path("maxOutputTokens").intValue());
+        var generationConfig = body.path("generationConfig");
+        var format = generationConfig.path("responseFormat").path("text");
+        assertEquals(8192, generationConfig.path("maxOutputTokens").intValue());
+        assertFalse(generationConfig.has("temperature"));
+        assertEquals("LOW", generationConfig.path("thinkingConfig").path("thinkingLevel").asText());
         assertEquals("APPLICATION_JSON", format.path("mimeType").asText());
         assertEquals(mapper.valueToTree(schema()), format.path("schema"));
         assertEquals("prueba", body.path("contents").get(0).path("parts").get(0).path("text").asText());

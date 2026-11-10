@@ -57,6 +57,8 @@ public final class ProgresoEntrevista {
     private static final Pattern IMPACTO_CUALIFICADO_FUNCIONAL = Pattern.compile(
             "^(?:mucho|muchisimo|bastante|poco|muy poco|nada|un poco),?\\s+puedo\\s+(?:hacer|realizar)\\s+(?:mis|las)\\s+actividades(?:\\s+habituales)?[.!]?$");
     private static final Pattern TEMPERATURA_BARE = Pattern.compile("^(\\d{2}(?:[.,]\\d)?)$|^(\\d{2}(?:[.,]\\d)?)[.!]$");
+    private static final Pattern ESCALA_DOLOR = Pattern.compile(
+            "\\b(?:(?:1|uno)\\s+(?:a|al)\\s+(?:10|diez)|entre\\s+(?:1|uno)\\s+y\\s+(?:10|diez))\\b");
     private static final Pattern ANAFORA_PLURAL_SINTOMAS = Pattern.compile("\\b(?:estos|estas|esos|esas)\\s+(?:sintomas|signos|molestias)\\b");
     private static final Pattern PREGUNTA_VALOR_TERMOMETRO_ANTES = Pattern.compile("\\b(?:numero|valor|medicion)\\b.{0,40}\\b(?:termometro|temperatura)\\b");
     private static final Pattern PREGUNTA_VALOR_TERMOMETRO_DESPUES = Pattern.compile("\\b(?:termometro|temperatura)\\b.{0,40}\\b(?:numero|valor|mostro|marco|vio)\\b");
@@ -159,6 +161,12 @@ public final class ProgresoEntrevista {
             return hasQuestionForm(text) || proposedDimension != null || invitacion
                     ? Optional.of("PREGUNTA_TRAS_CIERRE") : Optional.empty();
         }
+        if (objetivo.dimension() == Dimension.INTENSIDAD
+                && !invitacion && !cierre
+                && (proposedDimension == null || proposedDimension == Dimension.INTENSIDAD)
+                && !ESCALA_DOLOR.matcher(text).find()) {
+            return Optional.of("ESCALA_DOLOR_AUSENTE");
+        }
         if (objetivo.tipo() == TipoObjetivo.DATO) {
             if (cierre || invitacion) return Optional.of("PREGUNTA_PREMATURA");
             boolean medicionSubpaso = objetivo.dimension() == Dimension.TEMPERATURA
@@ -169,16 +177,13 @@ public final class ProgresoEntrevista {
                 return mentioned.isEmpty() || preguntaMencionaSoloObjetivo(mentioned, objetivo.sintomaId())
                         ? Optional.empty() : Optional.of("SINTOMA_NO_COINCIDE");
             }
-            boolean impactoDelMismoDolor = objetivo.dimension() == Dimension.INTENSIDAD
-                    && proposedDimension == Dimension.IMPACTO
-                    && objetivo.sintomaId() != null && objetivo.sintomaId().startsWith("dolor:");
-            if (proposedDimension != objetivo.dimension() && !impactoDelMismoDolor) {
+            if (proposedDimension != objetivo.dimension()) {
                 return Optional.of("DIMENSION_NO_COINCIDE");
             }
             if (!mentioned.isEmpty() && !preguntaMencionaSoloObjetivo(mentioned, objetivo.sintomaId())) {
                 return Optional.of("SINTOMA_NO_COINCIDE");
             }
-            if (mentioned.isEmpty() && hayVariosCandidatosParaPregunta(objetivo, proposedDimension)) {
+            if (mentioned.isEmpty() && hayVariosCandidatosParaPregunta(proposedDimension)) {
                 return Optional.of("OBJETIVO_AMBIGUO");
             }
             Dato actual = datos.stream().filter(d -> Objects.equals(d.sintomaId(), objetivo.sintomaId())
@@ -230,15 +235,9 @@ public final class ProgresoEntrevista {
         return genericPainAlias && distinctPainIds == 1;
     }
 
-    private boolean hayVariosCandidatosParaPregunta(ObjetivoTurno objetivo, Dimension dimension) {
+    private boolean hayVariosCandidatosParaPregunta(Dimension dimension) {
         long candidatos = datos.stream().filter(d -> d.estado() == Estado.PENDIENTE && d.dimension() == dimension)
                 .map(Dato::sintomaId).distinct().count();
-        if (dimension == Dimension.IMPACTO && objetivo.dimension() == Dimension.INTENSIDAD
-                && objetivo.sintomaId() != null && objetivo.sintomaId().startsWith("dolor:")) {
-            candidatos += datos.stream().filter(d -> d.estado() == Estado.PENDIENTE
-                            && d.dimension() == Dimension.INTENSIDAD && d.sintomaId().equals(objetivo.sintomaId()))
-                    .count();
-        }
         return candidatos > 1;
     }
 
@@ -255,7 +254,7 @@ public final class ProgresoEntrevista {
     private static final class Tracker {
         private final Clave clave;
         private final String etiqueta;
-        private Dimension dimension;
+        private final Dimension dimension;
         private Estado estado = Estado.PENDIENTE;
         private int intentos;
         private String valor;
@@ -387,6 +386,7 @@ public final class ProgresoEntrevista {
                     if (valor != null) {
                         target.set(Estado.RESPONDIDO, valor);
                         target.medicionConfirmada = true;
+                        ultimoTurnoPacienteTieneHechos = true;
                         tareaAclarar = null;
                         advanced = true;
                     } else if (UNKNOWN.matcher(text).find() || isNegativeMeasurementConfirmation(text)
@@ -404,13 +404,19 @@ public final class ProgresoEntrevista {
                 for (Clave key : tarea.claves()) {
                     Tracker target = trackers.get(key);
                     if (target != null && (target.estado == Estado.PENDIENTE || target.estado == Estado.AGOTADO)) {
-                        if (turn.excluido()) {
+                        if (target.dimension == Dimension.IMPACTO) {
+                            // A prior interview may already have asked this optional datum.
+                            ResultadoRespuesta result = turn.excluido() ? new ResultadoRespuesta(null, null) : answer(target, text);
+                            target.set(result.estado() == null ? Estado.DESCONOCIDO : result.estado(), result.valor());
+                            advanced |= result.estado() != null;
+                        } else if (turn.excluido()) {
                             invalidAnswer(target);
                             tareaAclarar = tarea;
                         } else {
                             ResultadoRespuesta result = answer(target, text);
                             if (result.estado() != null) {
                                 target.set(result.estado(), result.valor());
+                                ultimoTurnoPacienteTieneHechos |= result.estado() == Estado.RESPONDIDO;
                                 tareaAclarar = null;
                                 advanced = true;
                             } else {
@@ -566,18 +572,12 @@ public final class ProgresoEntrevista {
                 return;
             }
             List<String> mentioned = symptoms(text).stream().map(Hallazgo::sintomaId).toList();
-            List<Tracker> candidates = trackers.values().stream()
-                    .filter(t -> t.estado == Estado.PENDIENTE && t.dimension == dimension)
-                    .toList();
-            if (candidates.isEmpty() && dimension == Dimension.IMPACTO) {
-                candidates = trackers.values().stream().filter(t -> t.estado == Estado.PENDIENTE
-                        && t.dimension == Dimension.INTENSIDAD).toList();
-            }
-            if (candidates.isEmpty() && dimension == Dimension.INTENSIDAD
-                    && !text.contains("dolor") && !text.contains("duele")) {
-                candidates = trackers.values().stream().filter(t -> t.estado == Estado.PENDIENTE
-                        && t.dimension == Dimension.IMPACTO).toList();
-            }
+            List<Tracker> candidates = dimension == Dimension.IMPACTO
+                    ? trackers.values().stream().filter(t -> t.dimension == Dimension.INICIO)
+                            .map(t -> candidatoImpactoHistorico(t))
+                            .filter(t -> t.estado == Estado.PENDIENTE).toList()
+                    : trackers.values().stream()
+                            .filter(t -> t.estado == Estado.PENDIENTE && t.dimension == dimension).toList();
             if (dimension != null) {
                 List<Tracker> agotados = trackers.values().stream()
                         .filter(t -> t.estado == Estado.AGOTADO && t.dimension == dimension).toList();
@@ -627,15 +627,17 @@ public final class ProgresoEntrevista {
                     .anyMatch(target -> target.estado == Estado.PENDIENTE
                             && target.intentos < MAX_INTENTOS_POR_DATO);
             for (Tracker target : targets) {
+                trackers.putIfAbsent(target.clave, target);
                 if (target.intentos < MAX_INTENTOS_POR_DATO) target.intentos++;
-            }
-            for (Tracker target : targets) {
-                if (dimension == Dimension.IMPACTO && target.dimension == Dimension.INTENSIDAD) {
-                    target.dimension = Dimension.IMPACTO;
-                }
             }
             // An answer to a different dimension never completes this target.
             tarea = new Tarea(TipoTarea.DATO, targets.stream().map(t -> t.clave).toList(), text);
+        }
+
+        private Tracker candidatoImpactoHistorico(Tracker sintoma) {
+            Clave key = new Clave(sintoma.clave.sintomaId(), Dimension.IMPACTO);
+            Tracker existente = trackers.get(key);
+            return existente == null ? new Tracker(key, sintoma.etiqueta) : existente;
         }
 
         private boolean sintomaConocidoParaBuilder(String id) {
@@ -660,9 +662,8 @@ public final class ProgresoEntrevista {
         private boolean ensureObjectives(Hallazgo symptom) {
             boolean added = false;
             added |= ensure(new Clave(symptom.sintomaId(), Dimension.INICIO), symptom.etiqueta());
-            Dimension severity = symptom.sintomaId().startsWith("dolor:") ? Dimension.INTENSIDAD : Dimension.IMPACTO;
-            if (!symptom.fiebre()) {
-                added |= ensure(new Clave(symptom.sintomaId(), severity), symptom.etiqueta());
+            if (symptom.sintomaId().startsWith("dolor:")) {
+                added |= ensure(new Clave(symptom.sintomaId(), Dimension.INTENSIDAD), symptom.etiqueta());
             }
             if (symptom.fiebre()) added |= ensure(new Clave(symptom.sintomaId(), Dimension.TEMPERATURA), symptom.etiqueta());
             return added;
@@ -735,20 +736,20 @@ public final class ProgresoEntrevista {
                 onset.set(Estado.RECHAZADO, null);
                 changed = true;
             }
-            Dimension severityDimension = symptom.sintomaId().startsWith("dolor:") ? Dimension.INTENSIDAD : Dimension.IMPACTO;
-            Tracker severity = trackers.get(new Clave(symptom.sintomaId(), severityDimension));
-            if (severity != null && severity.estado != Estado.RESPONDIDO) {
-                String correlatedText = uniqueReference ? text : segment;
-                String functionalImpact = impactValueSpontaneous(correlatedText);
-                if (severity.dimension == Dimension.INTENSIDAD && functionalImpact != null
-                        && (containsSymptomInSegment(text, symptom.sintomaId()) || uniqueReference
-                            || uniquePain(text, symptom.sintomaId()))) {
-                    severity.dimension = Dimension.IMPACTO;
+            String functionalImpact = impactValueSpontaneous(uniqueReference ? text : segment);
+            if (functionalImpact != null && (containsSymptomInSegment(segment, symptom.sintomaId()) || uniqueReference)) {
+                Clave impactKey = new Clave(symptom.sintomaId(), Dimension.IMPACTO);
+                ensure(impactKey, symptom.etiqueta());
+                Tracker impact = trackers.get(impactKey);
+                if (impact.estado != Estado.RESPONDIDO) {
+                    impact.set(Estado.RESPONDIDO, functionalImpact);
+                    changed = true;
                 }
-                String severityValue = severity.dimension == Dimension.INTENSIDAD
-                        ? painValueSpontaneous(uniqueReference
-                                || (uniquePain(text, symptom.sintomaId()) && hasExplicitPainScale(text)) ? text : segment)
-                        : impactValueSpontaneous(correlatedText);
+            }
+            Tracker severity = trackers.get(new Clave(symptom.sintomaId(), Dimension.INTENSIDAD));
+            if (severity != null && severity.estado != Estado.RESPONDIDO) {
+                String severityValue = painValueSpontaneous(uniqueReference
+                        || (uniquePain(text, symptom.sintomaId()) && hasExplicitPainScale(text)) ? text : segment);
                 if (severityValue != null && (containsSymptomInSegment(segment, symptom.sintomaId())
                         || uniqueReference)) {
                     severity.set(Estado.RESPONDIDO, severityValue);
@@ -873,7 +874,7 @@ public final class ProgresoEntrevista {
             if (invitacionAporteNoClaro) return MotivoCierre.LIMITE_RECURSOS;
             if (totalRespuestas >= MAX_SIN_AVANCE && noAvance >= MAX_SIN_AVANCE) return MotivoCierre.SIN_AVANCE;
             if (!motivoClinico && !emocional) return MotivoCierre.EN_CURSO;
-            boolean allTerminal = trackers.values().stream().allMatch(t -> t.estado != Estado.PENDIENTE);
+            boolean allTerminal = siguienteTrackerPendiente() == null;
             if (!allTerminal) return MotivoCierre.EN_CURSO;
             if (yaDijoQueNoAgrega) return agotado() ? MotivoCierre.LIMITE_RECURSOS : MotivoCierre.DATOS_RESUELTOS;
             if (!invitacionAbierta) return MotivoCierre.EN_CURSO;
@@ -910,7 +911,7 @@ public final class ProgresoEntrevista {
         }
 
         private Tracker siguienteTrackerPendiente() {
-            return trackers.values().stream().filter(t -> t.estado == Estado.PENDIENTE)
+            return trackers.values().stream().filter(t -> t.estado == Estado.PENDIENTE && t.dimension != Dimension.IMPACTO)
                     .min(java.util.Comparator.comparingInt(t -> dimensionPriority(t.dimension))).orElse(null);
         }
 
@@ -928,7 +929,8 @@ public final class ProgresoEntrevista {
                 Tracker target = trackers.get(aclaracion.claves().get(0));
                 if (target != null && target.estado == Estado.PENDIENTE) {
                     return "La respuesta no aportó un valor reconocible para " + target.etiqueta + " (" + target.dimension
-                            + "). Pide una aclaración concreta de ese dato; conserva el objetivo pendiente.";
+                            + "). Pide una aclaración concreta de ese dato y conserva el objetivo pendiente."
+                            + (target.dimension == Dimension.INTENSIDAD ? " Incluí explícitamente la escala del 1 al 10." : "");
                 }
             }
             if (requiereAclaracion && tareaAclarar == null && invitacionAbierta && !respondioInvitacion) {
@@ -943,8 +945,10 @@ public final class ProgresoEntrevista {
                 if (selection.intentos() >= MAX_INTENTOS_POR_DATO) return "No insistas en el dato agotado. Continúa con el próximo objetivo pendiente y conserva este valor como desconocido.";
                 return switch (selection.objetivo().dimension()) {
                     case INICIO -> "Pregunta desde cuándo empezó " + selection.etiqueta() + "; no transfieras el inicio de otro síntoma.";
-                    case INTENSIDAD -> "Pregunta en un turno la intensidad del dolor" + (selection.etiqueta().startsWith("dolor ") ? " " + selection.etiqueta().substring("dolor ".length()) : "") + "; solo registra una escala explícitamente referida a dolor.";
-                    case IMPACTO -> "Pregunta en un turno el impacto funcional de " + selection.etiqueta() + "; una respuesta a otro síntoma no resuelve este dato.";
+                    case INTENSIDAD -> "Preguntá en un turno la intensidad del dolor"
+                            + (selection.etiqueta().startsWith("dolor ") ? " " + selection.etiqueta().substring("dolor ".length()) : "")
+                            + " e incluí explícitamente la escala del 1 al 10.";
+                    case IMPACTO -> "Conservá el impacto funcional que el paciente ya informó.";
                     case TEMPERATURA -> "Pregunta cuántos grados de temperatura marcó el termómetro; acepta que no se midió o que se desconoce, y no infieras un valor.";
                 };
             }
@@ -979,7 +983,7 @@ public final class ProgresoEntrevista {
                 || text.contains("afecta") || text.contains("actividades") || text.contains("hacer tus cosas")
                 || esPreguntaDeImpactoFuncional(text)) return Dimension.IMPACTO;
         if (text.contains("intensidad") || text.contains("cuanto te duele") || text.contains("0 al 10")
-                || text.contains("1 al 10") || text.contains("escala")) return Dimension.INTENSIDAD;
+                || ESCALA_DOLOR.matcher(text).find() || text.contains("escala")) return Dimension.INTENSIDAD;
         return null;
     }
 

@@ -42,7 +42,7 @@ class ChatCuantificacionFlowTest {
         when(provider.consultarContinuacion(anyString(), anyString(), any()))
                 .thenReturn(question("¿Desde cuándo empezó el dolor de cabeza?"),
                         question("¿Desde cuándo empezó la fiebre?"),
-                        question("Del 0 al 10, ¿cuánto te duele la cabeza?"),
+                        question("Del 1 al 10, ¿cuánto te duele la cabeza?"),
                         question("¿Qué temperatura marcó el termómetro?"));
 
         send("No tengo otros síntomas");

@@ -41,13 +41,13 @@ and active room required for hospital selection.
 
 Message files are UTF-8 with or without BOM, one message per line. Empty lines
 and lines beginning with `#` are ignored. Repeated `--message` arguments override
-the file. The example contains four messages:
+the file. The example reports measured temperature up front, answers the pain scale
+and then declines to add more:
 
 ```text
-Tengo fiebre y dolor de garganta desde ayer.
-La fiebre llego a 38.5 y el dolor es 5 de 10.
-No tengo dificultad para respirar ni dolor de pecho.
-No tengo enfermedades previas, no tomo medicacion y no tengo alergias.
+Tengo fiebre de 38 grados desde ayer. También me duele la garganta desde ayer. No tengo dificultad para respirar ni dolor de pecho.
+5 de 10.
+No tengo nada más que agregar.
 ```
 
 ## Success Criteria
@@ -110,6 +110,31 @@ classification. It also checks that the final patient-facing message includes
 the stored safety recommendation. It does not accept a local fallback. Repeatable `--expected-alarm TERM` can additionally check
 specific terms in the stored alarm signs. This one-message fixture must close
 in the first turn without any extra early-finalization allowance.
+
+## Text and Voice Consistency
+
+Run `python -B scripts/test_backend_isolated.py` against its disposable PostgreSQL
+database. The backend regressions cover mixed clinical and off-topic turns, exact
+question objectives, both final output branches and alarm priority. Voice tests
+exercise silence, tool closure and late transcriptions. Hold REST pending and
+check for one `aviso_urgente` before classification. For an alarm known before
+closure, the notice must precede `entrevista_finalizada`. After releasing REST,
+confirm one classification and one queue update.
+
+For provider verification, run the synthetic `ChatHardeningGeminiSmokeTest` and
+`SesionVozContinuidadGeminiSmokeTest` with `GEMINI_CHAT_MODEL=gemini-3.8-flash` and
+`-Dpretriage.gemini.hardening.live=true`. Then run the normal and alarm HTTP cases
+above in sequence with the dedicated test account and disposable database. These
+tests exercise Gemini REST. The synthetic voice events simulate the Live transport.
+
+For Android, build and run `:composeApp:testDebugUnitTest` and `:composeApp:assembleDebug`
+with `-PBACKEND_BASE_URL=http://10.0.2.2:18080` for a local emulator and the backend
+started as described above. Compare the same synthetic report by text, by voice
+and after switching from text to voice. Capture the urgent notice while the result
+is pending and check that it remains visible through recovery of the same chat.
+Check a separate chat to confirm isolation. Test real Live audio separately on an
+Android test device with a normal case, an interruption and an alarm. Use only
+synthetic data and compare the facts, final state and queue entry across modalities.
 
 ## Diagnostics and Regression Tests
 

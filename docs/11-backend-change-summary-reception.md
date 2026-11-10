@@ -45,11 +45,11 @@ separately in `10-staff-identity-memberships-and-invitations.md`.
 
 - Reception classification uses provider-native structured output with schema
   validation.
-- Gemini REST runs reception classification with temperature 0 and JSON Schema;
-  this does not guarantee identical classifications across calls.
+- Gemini REST may return different classifications across calls.
 - A single request without retries reaches the deterministic fallback promptly.
 - Connect and request timeouts bound unavailable or stalled Gemini calls.
-- `GEMINI_CHAT_MODEL` configures the REST model; `GEMINI_API_KEY` stays in the backend.
+- `GEMINI_CHAT_MODEL` configures the REST model, which defaults to `gemini-3.8-flash`.
+  `GEMINI_API_KEY` stays in the backend.
 
 ## Local persistence behavior
 

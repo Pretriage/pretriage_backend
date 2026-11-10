@@ -12,10 +12,9 @@ import uuid
 from pathlib import Path
 
 DEFAULT_MESSAGES = [
-    "Tengo fiebre y dolor de garganta desde ayer.",
-    "La fiebre llego a 38.5 y el dolor es 5 de 10.",
-    "No tengo dificultad para respirar ni dolor de pecho.",
-    "No tengo enfermedades previas, no tomo medicacion y no tengo alergias.",
+    "Tengo fiebre de 38 grados desde ayer. También me duele la garganta desde ayer. No tengo dificultad para respirar ni dolor de pecho.",
+    "5 de 10.",
+    "No tengo nada más que agregar.",
 ]
 
 ACTIVE_CONSULTA_STATES = (
@@ -326,11 +325,11 @@ def submit_text_turn(backend_url, chat_id, message, token, poll_interval=0.5,
     while True:
         state = current.get("estadoTurnoTexto")
         classification = current.get("estadoClasificacion")
-        if state == "NO_DISPONIBLE" or classification == "FALLIDA":
+        if state == "NO_DISPONIBLE" or classification in ("FALLIDA", "PARCIAL"):
             raise RuntimeError(f"Text turn failed: estadoTurnoTexto={state}, estadoClasificacion={classification}")
-        if state == "COMPLETADA":
+        if state == "COMPLETADA" and classification != "PENDIENTE":
             return {"chat": current, "requestId": request_id}
-        if state != "PENDIENTE":
+        if state not in ("PENDIENTE", "COMPLETADA"):
             raise RuntimeError(f"Unexpected text-turn state: {state}")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -363,12 +362,14 @@ def parse_result_json(raw):
                 "signosAlarma", "antecedentesRelevantes", "medicamentos", "alergias",
                 "posibilidadEmbarazo", "observaciones", "nivelPrioridad",
                 "requiereAtencionInmediata", "recomendacionSeguridad")
-    missing = [key for key in required if key not in value or (key != "intensidadDolor" and value[key] in (None, ""))]
+    missing = [key for key in required if key not in value or (key != "intensidadDolor" and value[key] is None)]
     if missing:
         raise RuntimeError(f"triage JSON missing meaningful fields: {', '.join(missing)}")
-    for field in ("motivoConsulta", "inicio", "evolucion", "posibilidadEmbarazo", "observaciones", "recomendacionSeguridad"):
+    for field in ("motivoConsulta", "inicio", "evolucion", "posibilidadEmbarazo", "recomendacionSeguridad"):
         if not isinstance(value[field], str) or not value[field].strip():
             raise RuntimeError(f"triage JSON {field} must be non-empty text")
+    if not isinstance(value["observaciones"], str):
+        raise RuntimeError("triage JSON observaciones must be text")
     pain = value["intensidadDolor"]
     if pain is not None and (type(pain) is not int or not 0 <= pain <= 10):
         raise RuntimeError("triage JSON intensidadDolor must be null or an integer from 0 to 10")
@@ -523,7 +524,7 @@ def main():
 
     if not args.skip_gemini_check:
         set_failure_stage("gemini preflight")
-        model = args.gemini_model or env_value(dotenv, "GEMINI_CHAT_MODEL", "gemini-3.5-flash-lite")
+        model = args.gemini_model or env_value(dotenv, "GEMINI_CHAT_MODEL", "gemini-3.8-flash")
         check_gemini(model, env_value(dotenv, "GEMINI_API_KEY"),
                      env_value(dotenv, "GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"))
         print(f"Gemini OK: {model}")

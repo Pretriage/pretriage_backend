@@ -60,9 +60,10 @@ a esa aclaración mantiene el vínculo contextual sin inferir hechos del bot.
 
 ## Respuesta final incompleta de Gemini REST
 
-La clasificación posterior al cierre de Live exige una respuesta REST completa
-(`finishReason=STOP`). El límite de salida REST es configurable con
-`GEMINI_MAX_OUTPUT_TOKENS` (8192 por defecto); no cambia el audio ni el modelo Live.
+La clasificación posterior al cierre de Live usa Gemini REST (`gemini-3.8-flash`
+por defecto) y exige una respuesta completa (`finishReason=STOP`). El límite de
+salida REST se configura con `GEMINI_MAX_OUTPUT_TOKENS` (8192 por defecto) y se
+aplica a la clasificación.
 Si falla después del cierre, se conserva la transcripción y el chat queda cerrado,
 con `estadoClasificacion=FALLIDA`; no se genera una clasificación local. Puede
 reintentarse el procesamiento sin aportar otro mensaje. El log distingue razón de finalización y
@@ -159,6 +160,17 @@ La recompilación de mobile se realiza desde IntelliJ según la preferencia del 
 
 Una vez aceptado el cierre, la sesión detiene el envío de audio del micrófono y envía `audioStreamEnd`. Espera audio o transcripción de la despedida, su `turnComplete` y una ventana de un segundo sin nuevos fragmentos de entrada. Cada fragmento tardío reinicia esa ventana. Después solicita el cierre de Gemini y sigue recibiendo transcripciones hasta la confirmación normal del transporte (`1000`); recién entonces toma la instantánea y clasifica una sola vez. Un cierre normal iniciado por el proveedor también permite completar este paso.
 
+La instrucción de sistema pide español de Argentina, voseo y frases breves. El setup
+del modelo de audio nativo configura la voz. Al preguntar por intensidad del dolor,
+Live indica la escala del 1 al 10. El impacto funcional que el paciente mencione se
+conserva en observaciones. Ante una molestia ambigua, Live pide que explique qué
+siente antes de registrarla. Cuando la persona declina la invitación y ya están
+resueltos los datos pendientes, Live solicita el cierre. `finalizar_entrevista` devuelve `accion`
+para distinguir `ESPERAR`, `CORREGIR_RESUMEN`, `ACTUALIZAR_RESUMEN`,
+`PREGUNTAR_UNA_VEZ` y `DESPEDIR`. Solo una pregunta pendiente requiere hablarle al
+paciente antes de un cierre aceptado. Al aceptar el cierre, Live agradece y anticipa
+el procesamiento. El mensaje final guardado confirma el registro.
+
 Antes de aceptarlo, `validarAlcanceCierreVoz` consulta Gemini REST con una instantánea
 de la entrevista y sin escribir mensajes ni estados. `AMBIGUO` pide aclaración y
 `FUERA_DE_CONTEXTO` redirige a salud; ambos conservan abierto el canal. Una nueva
@@ -211,6 +223,12 @@ misma vía de alarma que sus formas canónicas; se conservan los controles de
 negación, hipótesis, citas y roles. «Terminá el chat» permite expresar una solicitud
 de cierre, sin convertir una cita, una hipótesis o una negación en intención.
 El audio o el aviso de urgencia del bot no sustituye la evidencia del paciente.
+
+Ante una alarma reconocida en un turno confirmado, el backend envía `aviso_urgente`
+una vez por sesión. La app muestra «Buscá atención médica urgente ahora» por encima
+del estado de procesamiento, explica el cierre e indica ir a una guardia aunque la
+clasificación siga pendiente. El aviso permanece visible durante fallos y reintentos
+del mismo chat. También cubre una alarma confirmada durante el drenaje antes de REST.
 
 La intención de cierre permanece interna mientras se estabilizan las
 transcripciones. El evento `entrevista_finalizada` se envía al confirmar ese

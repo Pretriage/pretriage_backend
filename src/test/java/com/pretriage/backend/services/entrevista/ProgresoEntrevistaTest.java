@@ -152,6 +152,7 @@ class ProgresoEntrevistaTest {
                 b("¿Podrías precisarme aproximadamente cuántas horas o días hace que empezó ese dolor?"),
                 p("hace 2 años y 1 día"),
                 b("¿Este dolor te impide realizar tus actividades habituales?"), p("Sí."),
+                b("¿Cuánto te duele del 1 al 10?"), p("4"),
                 b("¿Hay algo más que quieras contar?"), p("No")));
 
         var inicio = dato(progreso, "dolor:cabeza", ProgresoEntrevista.Dimension.INICIO);
@@ -343,7 +344,7 @@ class ProgresoEntrevistaTest {
                     p("Tengo tos"),
                     b("¿Cuánto te afecta la tos para hacer tus actividades?"),
                     p(respuesta)));
-            assertEquals(Estado.PENDIENTE,
+            assertEquals(Estado.DESCONOCIDO,
                     dato(progreso, "sintoma:tos", ProgresoEntrevista.Dimension.IMPACTO).estado(), respuesta);
         }
 
@@ -351,7 +352,7 @@ class ProgresoEntrevistaTest {
                 p("Tengo tos y fiebre"),
                 b("¿Cuánto te afecta la tos para hacer tus actividades?"),
                 p("Poco, puedo hacer mis actividades por la fiebre.")));
-        assertEquals(Estado.PENDIENTE,
+        assertEquals(Estado.DESCONOCIDO,
                 dato(otroSintoma, "sintoma:tos", ProgresoEntrevista.Dimension.IMPACTO).estado());
     }
 
@@ -725,8 +726,8 @@ class ProgresoEntrevistaTest {
                 p("Me cuesta comer por las náuseas")));
         assertEquals(Estado.RESPONDIDO,
                 dato(progreso, "sintoma:nauseas", ProgresoEntrevista.Dimension.IMPACTO).estado());
-        assertEquals(Estado.PENDIENTE,
-                dato(progreso, "sintoma:mareos", ProgresoEntrevista.Dimension.IMPACTO).estado());
+        assertTrue(progreso.datos().stream().noneMatch(d -> d.sintomaId().equals("sintoma:mareos")
+                && d.dimension() == ProgresoEntrevista.Dimension.IMPACTO));
         assertFalse(progreso.puedeCerrar());
 
         var atribuido = ProgresoEntrevista.evaluar(turnos(p("Tengo mareo"),
@@ -744,18 +745,37 @@ class ProgresoEntrevistaTest {
         assertEquals(new ProgresoEntrevista.ObjetivoTurno(ProgresoEntrevista.TipoObjetivo.DATO,
                 "dolor:cabeza", ProgresoEntrevista.Dimension.INTENSIDAD), progreso.objetivoDelTurno());
         assertTrue(progreso.validarPreguntaPropuesta("Del 1 al 10, ¿cuánto te duele la cabeza?").isEmpty());
-        assertTrue(progreso.validarPreguntaPropuesta("¿Qué tan fuerte sentís el dolor de cabeza?").isEmpty(),
-                "La paráfrasis reconocible del mismo síntoma se delega al verifier objetivo");
-        assertTrue(progreso.validarPreguntaPropuesta("¿Te cuesta caminar por el dolor de cabeza?").isEmpty(),
-                "El impacto funcional del mismo dolor puede responder la dimensión de intensidad");
+        assertEquals("ESCALA_DOLOR_AUSENTE",
+                progreso.validarPreguntaPropuesta("¿Qué tan fuerte sentís el dolor de cabeza?").orElseThrow());
+        assertEquals("DIMENSION_NO_COINCIDE",
+                progreso.validarPreguntaPropuesta("¿Te cuesta caminar por el dolor de cabeza?").orElseThrow());
         assertEquals("DIMENSION_NO_COINCIDE",
                 progreso.validarPreguntaPropuesta("¿Cuánto marcó el termómetro?").orElseThrow());
         assertEquals("SINTOMA_NO_COINCIDE",
-                progreso.validarPreguntaPropuesta("¿Cuánto te duele la espalda?").orElseThrow());
+                progreso.validarPreguntaPropuesta("¿Cuánto te duele la espalda del 1 al 10?").orElseThrow());
         assertEquals("PREGUNTA_PREMATURA",
                 progreso.validarPreguntaPropuesta("¿Hay algo más que quieras agregar?").orElseThrow());
-        assertTrue(progreso.validarPreguntaPropuesta("¿Podrías explicarme mejor lo que sientes?").isEmpty(),
-                "El phrasing no reconocido se delega al verifier semántico");
+        assertEquals("ESCALA_DOLOR_AUSENTE",
+                progreso.validarPreguntaPropuesta("¿Podrías explicarme mejor lo que sientes?").orElseThrow());
+    }
+
+    @Test
+    void escalaNuevaAceptaUnCeroDeclaradoPorElPacienteSinSolicitarlo() {
+        var progreso = ProgresoEntrevista.evaluar(turnos(
+                p("Me duele la cabeza desde ayer"),
+                b("¿Cuánto te duele la cabeza del 1 al 10?"), p("0 de 10")));
+
+        var intensidad = dato(progreso, "dolor:cabeza", ProgresoEntrevista.Dimension.INTENSIDAD);
+        assertEquals(Estado.RESPONDIDO, intensidad.estado());
+        assertEquals("0", intensidad.valor());
+        assertTrue(progreso.ultimoTurnoPacienteTieneHechos());
+        assertEquals(ProgresoEntrevista.TipoObjetivo.INVITACION, progreso.objetivoDelTurno().tipo());
+
+        var invalida = ProgresoEntrevista.evaluar(turnos(
+                p("Me duele la cabeza desde ayer"),
+                b("¿Cuánto te duele la cabeza del 1 al 10?"), p("8 kg")));
+        assertFalse(invalida.ultimoTurnoPacienteTieneHechos());
+        assertEquals(Estado.PENDIENTE, dato(invalida, "dolor:cabeza", ProgresoEntrevista.Dimension.INTENSIDAD).estado());
     }
 
     @Test
@@ -828,19 +848,16 @@ class ProgresoEntrevistaTest {
     }
 
     @Test
-    void aclaracionTrasPreguntaDeImpactoConservaLaDimensionEfectivaDelDolor() {
+    void respuestaAmbiguaDeImpactoHistoricoNoGeneraOtraPreguntaDeImpacto() {
         var progreso = ProgresoEntrevista.evaluar(turnos(
                 p("Me duele la cabeza"),
                 b("¿Te cuesta caminar por el dolor de cabeza?"),
                 p("Quizás")));
 
-        assertTrue(progreso.requiereAclaracion());
-        assertEquals(new ProgresoEntrevista.ObjetivoTurno(ProgresoEntrevista.TipoObjetivo.ACLARACION,
-                "dolor:cabeza", ProgresoEntrevista.Dimension.IMPACTO), progreso.objetivoDelTurno());
-        assertTrue(progreso.validarPreguntaPropuesta(
-                "¿Qué tanto te afecta caminar por el dolor de cabeza?").isEmpty());
-        assertEquals("DIMENSION_NO_COINCIDE", progreso.validarPreguntaPropuesta(
-                "¿Del 1 al 10, cuánto te duele la cabeza?").orElseThrow());
+        assertFalse(progreso.requiereAclaracion());
+        assertEquals(Estado.DESCONOCIDO, dato(progreso, "dolor:cabeza", ProgresoEntrevista.Dimension.IMPACTO).estado());
+        assertEquals(new ProgresoEntrevista.ObjetivoTurno(ProgresoEntrevista.TipoObjetivo.DATO,
+                "dolor:cabeza", ProgresoEntrevista.Dimension.INICIO), progreso.objetivoDelTurno());
     }
 
     @Test
@@ -1088,8 +1105,7 @@ class ProgresoEntrevistaTest {
         var agotado = dato(progreso, "sintoma:tos", ProgresoEntrevista.Dimension.INICIO);
         assertEquals(ProgresoEntrevista.Estado.AGOTADO, agotado.estado());
         assertEquals(3, agotado.intentos());
-        assertEquals(ProgresoEntrevista.Estado.PENDIENTE,
-                dato(progreso, "sintoma:tos", ProgresoEntrevista.Dimension.IMPACTO).estado());
+        assertEquals(ProgresoEntrevista.TipoObjetivo.INVITACION, progreso.objetivoDelTurno().tipo());
         assertFalse(progreso.puedeCerrar());
     }
 
@@ -1103,6 +1119,8 @@ class ProgresoEntrevistaTest {
         var harina = ProgresoEntrevista.evaluar(turnos(p("Me duele harina")));
         assertTrue(harina.datos().isEmpty());
         assertFalse(harina.tieneHechosClinicos());
+        assertEquals(ProgresoEntrevista.TipoObjetivo.ACLARACION, harina.objetivoDelTurno().tipo());
+        assertTrue(harina.instruccionSiguientePaso().contains("aclaración abierta"));
     }
 
     @Test
@@ -1273,11 +1291,12 @@ class ProgresoEntrevistaTest {
     @Test
     void aclaracionAbiertaNoReemplazaElObjetivoDeUnDatoPendiente() {
         var progreso = ProgresoEntrevista.evaluar(turnos(
-                p("Tengo tos"), b("¿Desde cuándo empezó la tos?"), p("Messi 8"),
-                b("¿Desde cuándo empezó la tos?"), p("Desde ayer")));
+                p("Me duele la cabeza"), b("¿Desde cuándo empezó el dolor de cabeza?"), p("Messi 8"),
+                b("¿Desde cuándo empezó el dolor de cabeza?"), p("Desde ayer")));
 
-        assertEquals("desde ayer", dato(progreso, "sintoma:tos", ProgresoEntrevista.Dimension.INICIO).valor());
-        assertEquals(ProgresoEntrevista.TipoObjetivo.DATO, progreso.objetivoDelTurno().tipo());
+        assertEquals("desde ayer", dato(progreso, "dolor:cabeza", ProgresoEntrevista.Dimension.INICIO).valor());
+        assertEquals(new ProgresoEntrevista.ObjetivoTurno(ProgresoEntrevista.TipoObjetivo.DATO,
+                "dolor:cabeza", ProgresoEntrevista.Dimension.INTENSIDAD), progreso.objetivoDelTurno());
     }
 
     @Test
@@ -1395,12 +1414,12 @@ class ProgresoEntrevistaTest {
     @Test
     void preguntaSemanticaNoReemplazaUnDatoPendientePorInvitacion() {
         var progreso = ProgresoEntrevista.evaluar(turnos(
-                p("Tengo tos"), b("¿Desde cuándo empezó la tos?"), p("Desde ayer"),
+                p("Me duele la cabeza"), b("¿Desde cuándo empezó el dolor de cabeza?"), p("Desde ayer"),
                 b("¿Hay algún otro detalle que quieras compartir?"), p("No")));
 
         assertFalse(progreso.puedeCerrar());
         assertEquals(ProgresoEntrevista.TipoObjetivo.DATO, progreso.objetivoDelTurno().tipo());
-        assertEquals(Estado.PENDIENTE, dato(progreso, "sintoma:tos", ProgresoEntrevista.Dimension.IMPACTO).estado());
+        assertEquals(Estado.PENDIENTE, dato(progreso, "dolor:cabeza", ProgresoEntrevista.Dimension.INTENSIDAD).estado());
     }
 
     @Test

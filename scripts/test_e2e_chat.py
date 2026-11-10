@@ -32,6 +32,10 @@ class E2EHelpersTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             e2e_chat.parse_result_json(json.dumps(value))
 
+    def test_parse_result_allows_empty_observations(self):
+        value = dict(self.result(), observaciones="")
+        self.assertEqual(e2e_chat.parse_result_json(json.dumps(value))["observaciones"], "")
+
     def test_validation_rejects_mismatched_queue_state(self):
         row = {
             "chat_id": 10, "chat_patient_id": 3, "consulta_patient_id": 3,
@@ -101,12 +105,14 @@ class E2EHelpersTest(unittest.TestCase):
         request_id = "c7c614d7-f335-4ebd-8fa0-ddfd1cfe2d31"
         pending = {"estadoTurnoTexto": "PENDIENTE", "estadoClasificacion": "NO_SOLICITADA",
                    "solicitudTurnoTextoId": request_id, "mensajes": []}
+        pending_classification = dict(pending, estadoTurnoTexto="COMPLETADA",
+                                      estadoClasificacion="PENDIENTE")
         completed = {"estadoTurnoTexto": "COMPLETADA", "estadoClasificacion": "COMPLETADA",
                      "solicitudTurnoTextoId": request_id, "finalizado": True,
                      "mensajes": [{"autor": "PACIENTE", "contenido": "Tengo fiebre"},
                                   {"autor": "BOT", "contenido": "Gracias. Ya quedó registrado."}]}
         with patch.object(e2e_chat.uuid, "uuid4", return_value=uuid.UUID(request_id)), \
-                patch.object(e2e_chat, "http_json", side_effect=[pending, pending, completed]) as http:
+                patch.object(e2e_chat, "http_json", side_effect=[pending, pending_classification, completed]) as http:
             result = e2e_chat.submit_text_turn("http://backend", 7, "Tengo fiebre", "token", poll_interval=0)
 
         self.assertEqual(result["chat"], completed)
@@ -121,7 +127,8 @@ class E2EHelpersTest(unittest.TestCase):
     def test_text_turn_fails_on_unavailable_or_failed_classification(self):
         request_id = "c7c614d7-f335-4ebd-8fa0-ddfd1cfe2d31"
         for state, classification in (("NO_DISPONIBLE", "NO_SOLICITADA"),
-                                      ("PENDIENTE", "FALLIDA"), ("COMPLETADA", "FALLIDA")):
+                                      ("PENDIENTE", "FALLIDA"), ("COMPLETADA", "FALLIDA"),
+                                      ("COMPLETADA", "PARCIAL")):
             with self.subTest(state=state, classification=classification), \
                     patch.object(e2e_chat, "http_json", return_value={
                         "estadoTurnoTexto": state,

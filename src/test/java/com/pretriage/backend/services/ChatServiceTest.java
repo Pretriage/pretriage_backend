@@ -326,7 +326,7 @@ class ChatServiceTest {
         when(repoChat.findByIdAndPacienteUsuarioAuthId(1L, "auth0|paciente")).thenReturn(Optional.of(chat));
         when(repoChat.save(any(Chat.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(triageIaClient.consultarContinuacion(anyString(), anyString(), any()))
-                .thenReturn(new TriageAiResponse(false, "¿La tos te dificulta hacer tus actividades habituales?", null));
+                .thenReturn(new TriageAiResponse(false, "¿Hay algo más que quieras contar sobre la tos?", null));
 
         chatService.enviarMensaje("1", "auth0|paciente", "Desde ayer");
 
@@ -1564,13 +1564,13 @@ class ChatServiceTest {
         chat.agregarMensaje(new Mensaje("Me duele la cabeza desde ayer", AutorMensaje.PACIENTE, chat.getPaciente()));
         chat.agregarMensaje(new Mensaje("¿Hay algo más que quieras contar sobre lo que te pasa?", AutorMensaje.BOT, null));
         when(triageIaClient.consultarContinuacion(anyString(), anyString(), any()))
-                .thenReturn(new TriageAiResponse(false, "¿Del 0 al 10, cuánto te duele ahora?", null));
+                .thenReturn(new TriageAiResponse(false, "¿Del 1 al 10, cuánto te duele ahora?", null));
 
         var respuesta = chatService.enviarMensaje("1", "auth0|paciente", "No, no tengo más síntomas.");
 
         assertFalse(chat.isFinalizado());
         assertNull(chat.getResultadoTriageJson());
-        assertEquals("¿Del 0 al 10, cuánto te duele ahora?", respuesta.respuesta().contenido());
+        assertEquals("¿Del 1 al 10, cuánto te duele ahora?", respuesta.respuesta().contenido());
         verify(triageIaClient).consultarContinuacion(
                 contains("Una respuesta de que no tiene otros sintomas no impide cuantificar"),
                 contains("No, no tengo más síntomas"), any());

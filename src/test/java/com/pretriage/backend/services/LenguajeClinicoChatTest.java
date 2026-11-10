@@ -11,7 +11,7 @@ class LenguajeClinicoChatTest {
     @Test
     void reglasDeEntrevistaCuantificanSoloSintomasAfirmadosQueSiguenPendientes() {
         assertTrue(LenguajeClinicoChat.PREGUNTAS_SENCILLAS.contains("solo los datos pertinentes que sigan pendientes"));
-        assertTrue(LenguajeClinicoChat.PREGUNTAS_SENCILLAS.contains("unica invitacion abierta"));
+        assertTrue(LenguajeClinicoChat.PREGUNTAS_SENCILLAS.contains("como maximo una invitacion abierta"));
         assertFalse(LenguajeClinicoChat.PREGUNTAS_SENCILLAS.contains("maximo de cuatro preguntas"));
         assertTrue(LenguajeClinicoChat.PREGUNTAS_SENCILLAS.contains("sintomas que ya afirmo"));
         assertTrue(LenguajeClinicoChat.PREGUNTAS_SENCILLAS.contains("temperatura solo si el paciente la midio"));
