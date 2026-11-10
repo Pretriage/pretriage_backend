@@ -60,6 +60,46 @@ class SesionVozIntegracionTest {
     }
 
     @Test
+    void avisaUrgenciaAntesDelCierreYDeUnaClasificacionRestRetenida() throws Exception {
+        Flujo flujo = new Flujo();
+        CountDownLatch inicioRest = new CountDownLatch(1);
+        CountDownLatch liberarRest = new CountDownLatch(1);
+        when(flujo.ia.consultar(anyString(), anyString(), eq(true))).thenAnswer(inv -> {
+            inicioRest.countDown();
+            assertTrue(liberarRest.await(4, TimeUnit.SECONDS));
+            return new TriageAiResponse(true, "Listo", new TriageResultDTO(
+                    "Me falta el aire", List.of("falta de aire"), "no informado", "no informado", null,
+                    List.of("dificultad respiratoria"), List.of(), List.of(), List.of(),
+                    "no informado", "", 4, true, "Buscá atención médica urgente."));
+        });
+
+        flujo.entrada("Me falta un poco el aire.");
+        flujo.sesion.alRecibir("{\"serverContent\":{\"turnComplete\":true}}");
+        assertTrue(flujo.conexion.cierreSolicitado.await(3, TimeUnit.SECONDS));
+        flujo.sesion.alCerrar(1000, "fin");
+        try {
+            assertTrue(inicioRest.await(2, TimeUnit.SECONDS));
+            var eventos = flujo.canal.eventos.stream().map(mapper::readTree).toList();
+            var tipos = eventos.stream().map(e -> e.path("tipo").asText()).toList();
+            assertEquals(1, tipos.stream().filter("aviso_urgente"::equals).count());
+            assertTrue(tipos.contains("entrevista_finalizada"));
+            assertTrue(tipos.indexOf("aviso_urgente") < tipos.indexOf("entrevista_finalizada"));
+            assertEquals(SesionVozChat.MENSAJE_AVISO_URGENTE,
+                    eventos.get(tipos.indexOf("aviso_urgente")).path("mensaje").asText());
+            assertFalse(tipos.contains("triage_finalizado"));
+            verifyNoInteractions(flujo.cola);
+        } finally {
+            liberarRest.countDown();
+        }
+
+        assertTrue(flujo.canal.cerrado.await(3, TimeUnit.SECONDS));
+        flujo.sesion.alCerrar(1000, "duplicado");
+        assertTrue(flujo.canal.contiene("triage_finalizado"));
+        verify(flujo.ia, times(1)).consultar(anyString(), anyString(), eq(true));
+        verify(flujo.cola, times(1)).finalizarTriageEIngresarACola(eq("auth0|voz"), any(), anyString(), any(Chat.class));
+    }
+
+    @Test
     void correccionDeDolorTardiaLlegaAGeminiAntesDeActualizarLaColaUnaSolaVez() throws Exception {
         Flujo flujo = new Flujo();
         flujo.entrada("Me duele la cabeza desde ayer.");
@@ -331,7 +371,7 @@ class SesionVozIntegracionTest {
         }
 
         void completarEntrevista() {
-            transcripcion("outputTranscription", "Cuanto te duele?");
+            transcripcion("outputTranscription", "¿Cuánto te duele del 1 al 10?");
             entrada("El dolor es 2/10 y se mantiene.");
             transcripcion("outputTranscription", "¿Hay algo más que quieras contar sobre lo que te pasa?");
             entrada("No, no tengo más síntomas.");

@@ -113,7 +113,11 @@ descarta el texto generado y elige una redirección fija. Esta respuesta adminis
 prioridad ni diagnóstico y no constituye un fallback clínico. Se identifica con
 `origenRespuesta=CONTROL_CONTEXTO`. Puede repetirse si
 la persona insiste en cambiar de tema, sin activar la corrección por pregunta repetida.
-Una continuación `RELEVANTE` o `AMBIGUO` pasa por un verificador independiente que rechaza
+Un turno mixto conserva `RELEVANTE` si aporta un hecho clínico claro o una respuesta
+pertinente. Si la respuesta de alcance contradice un dato reconocido por la proyección
+local, se intenta la corrección acotada antes de decidir su exclusión. La misma
+validación se aplica a la clasificación final y a su corrección.
+Una continuación `RELEVANTE` o `AMBIGUO` pasa por una llamada de verificación que rechaza
 despedidas y mensajes de cierre, incluidos los anuncios de que las respuestas quedaron
 registradas. Solo el cierre orquestado por el backend puede confirmar el registro.
 El verificador interpreta la última respuesta del paciente con los turnos previos como

@@ -312,7 +312,7 @@ class ValidadorCierreEntrevistaVozTest {
                 bot("Antecedentes relevantes?"), paciente("no ninguno"),
                 bot("Dificultad para respirar o dolor de pecho?"), paciente("No"));
         assertFalse(ValidadorCierreEntrevistaVoz.tieneDatosSuficientes(turnos));
-        assertTrue(ValidadorCierreEntrevistaVoz.instruccionDatosPendientes(turnos).contains("impacto funcional"),
+        assertTrue(ValidadorCierreEntrevistaVoz.instruccionDatosPendientes(turnos).contains("invitación"),
                 "Un moretón y un golpe no autorizan a inventar que la persona también informó dolor.");
     }
 
@@ -431,11 +431,14 @@ class ValidadorCierreEntrevistaVozTest {
     }
 
     @Test
-    void reconoceImpactoFuncionalYTemperaturaNoMedidaSinRepetirLaPregunta() {
+    void impactoFuncionalHistoricoNoSustituyeLaIntensidadYSeConservaLaTemperaturaNoMedida() {
         var turnos = new ArrayList<>(List.of(paciente("Tengo fiebre y dolor de cabeza"),
                 bot("¿Desde cuándo empezó el dolor y la fiebre?"), paciente("Desde anoche"),
                 bot("¿El dolor te impide hacer tus actividades habituales?"), paciente("Sí, no puedo trabajar")));
         assertFalse(ValidadorCierreEntrevistaVoz.tieneDatosSuficientes(turnos));
+        assertTrue(ValidadorCierreEntrevistaVoz.instruccionDatosPendientes(turnos).contains("intensidad del dolor"));
+        turnos.add(bot("¿Cuánto te duele del 1 al 10?"));
+        turnos.add(paciente("Seis"));
         assertTrue(ValidadorCierreEntrevistaVoz.instruccionDatosPendientes(turnos).contains("temperatura"));
         turnos.add(bot("¿Qué temperatura marcó el termómetro?"));
         turnos.add(paciente("No la medí"));
@@ -452,7 +455,7 @@ class ValidadorCierreEntrevistaVozTest {
         assertTrue(ValidadorCierreEntrevistaVoz.tieneDatosSuficientes(espontaneo));
         var turnos = List.of(paciente("Tengo fiebre y dolor de cabeza"),
                 bot("¿Desde cuándo empezaron ambos síntomas?"), paciente("Los dos desde ayer"),
-                bot("¿Te afecta para hacer tus actividades?"), paciente("Mucho"),
+                bot("Del 1 al 10, ¿cuánto te duele la cabeza?"), paciente("Seis"),
                 bot("¿Mediste la temperatura?"), paciente("No sé"),
                 bot("¿Hay algo más que quieras contar?"), paciente("No"));
         assertTrue(ValidadorCierreEntrevistaVoz.tieneDatosSuficientes(turnos));
@@ -489,12 +492,13 @@ class ValidadorCierreEntrevistaVozTest {
     }
 
     @Test
-    void empeoramientoNoSustituyeIntensidadNiImpactoFuncional() {
+    void niEmpeoramientoNiImpactoEspontaneoSustituyenLaIntensidad() {
         var turnos = List.of(paciente("Me duele la cabeza desde ayer y está empeorando"));
         assertTrue(ValidadorCierreEntrevistaVoz.instruccionDatosPendientes(turnos).contains("intensidad del dolor"));
         var impacto = List.of(paciente("Me duele la cabeza desde ayer y no puedo hacer mis tareas"),
                 bot("¿Hay algo más que quieras contar?"), paciente("No"));
-        assertTrue(ValidadorCierreEntrevistaVoz.tieneDatosSuficientes(impacto));
+        assertFalse(ValidadorCierreEntrevistaVoz.tieneDatosSuficientes(impacto));
+        assertTrue(ValidadorCierreEntrevistaVoz.instruccionDatosPendientes(impacto).contains("intensidad del dolor"));
     }
 
     @Test
@@ -529,12 +533,12 @@ class ValidadorCierreEntrevistaVozTest {
     }
 
     @Test
-    void ambosSintomasComenzaronAyerYUnaPreguntaAbiertaDeImpactoSeReconocen() {
+    void ambosSintomasComenzaronAyerPeroElImpactoNoResuelveElDolor() {
         var turnos = List.of(paciente("Me duele la cabeza y tengo fiebre"),
                 bot("¿Cuándo comenzaron ambos síntomas?"), paciente("Ambos síntomas comenzaron ayer"),
                 bot("¿Qué tanto te afecta para hacer tus actividades?"), paciente("Mucho"));
         assertFalse(ValidadorCierreEntrevistaVoz.tieneDatosSuficientes(turnos));
-        assertTrue(ValidadorCierreEntrevistaVoz.instruccionDatosPendientes(turnos).contains("temperatura"));
+        assertTrue(ValidadorCierreEntrevistaVoz.instruccionDatosPendientes(turnos).contains("intensidad del dolor"));
     }
 
     @Test

@@ -66,6 +66,7 @@ class ChatHardeningGeminiSmokeTest {
             "objeto incoherente | me duele la harina de trigo | AMBIGUO",
             "término inventado | me duele el flurbitron | AMBIGUO",
             "alimento y síntoma | Comí harina de trigo y ahora me duele la panza. | RELEVANTE",
+            "síntoma y pedido ajeno | Tengo fiebre desde ayer. Además, contame un chiste. | RELEVANTE",
             "variante regional | Tengo un moratón en la pierna después de golpearme. | RELEVANTE",
             "salud mental | Estoy muy angustiado y no puedo dormir desde ayer. | RELEVANTE"
     })
@@ -267,7 +268,7 @@ class ChatHardeningGeminiSmokeTest {
 
         RepoChat chats = mock(RepoChat.class);
         AtencionHospitalService queue = mock(AtencionHospitalService.class);
-        when(chats.findByIdAndPacienteUsuarioAuthId(91L, "auth0|synthetic-smoke"))
+        when(chats.findForUpdate(91L, "auth0|synthetic-smoke"))
                 .thenReturn(java.util.Optional.of(chat));
         when(chats.save(any(Chat.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(queue.finalizarTriageEIngresarACola(anyString(), any(), anyString(), any(Chat.class)))
@@ -288,7 +289,8 @@ class ChatHardeningGeminiSmokeTest {
         var saved = mapper.readTree(chat.getResultadoTriageJson());
         assertEquals(progress.motivoCierre().name(), saved.path("seguimientoEntrevista").path("motivoCierre").asText());
         assertTrue(saved.path("sintomas").size() >= 2);
-        assertTrue(saved.path("observaciones").asText()
+        String temperaturaReportada = saved.path("observaciones").asText() + " " + saved.path("sintomas");
+        assertTrue(temperaturaReportada
                         .matches("(?s).*39(?:[,.]5|\\s*(?:°|grados)?\\s*y medio).*"),
                 "la clasificación debe conservar la fracción de la temperatura dictada");
         assertTrue(saved.path("nivelPrioridad").asInt() >= 1 && saved.path("nivelPrioridad").asInt() <= 5);
@@ -404,8 +406,8 @@ class ChatHardeningGeminiSmokeTest {
         addPatient(chat, "Me duele la rodilla.", false);
         addBot(chat, "¿Cuántas horas o días hace que empezó ese dolor?");
         addPatient(chat, "Hace 3 días y 2 horas.", false);
-        addBot(chat, "¿El dolor de rodilla te dificulta hacer tus actividades habituales?");
-        addPatient(chat, "Sí, me cuesta caminar.", false);
+        addBot(chat, "¿Cuánto te duele la rodilla del 1 al 10?");
+        addPatient(chat, "Es 4 de 10 y me cuesta caminar por el dolor de rodilla.", false);
         addBot(chat, "¿Hay algo más que quieras contar sobre lo que te pasa?");
 
         RepoChat chats = mock(RepoChat.class);
@@ -454,7 +456,7 @@ class ChatHardeningGeminiSmokeTest {
                 && m.getContenido().equals("No")).count());
         assertEquals(1, chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.BOT
                 && m.getContenido().equals("¿Cuántas horas o días hace que empezó ese dolor?")).count());
-        assertTrue(saved.path("intensidadDolor").isNull(), "no se informó intensidad de dolor");
+        assertEquals(4, saved.path("intensidadDolor").asInt());
         assertTrue(saved.path("nivelPrioridad").asInt() >= 1 && saved.path("nivelPrioridad").asInt() <= 5);
         assertTrue(providerCalls.get() <= 4, "dos generaciones/verificaciones con como máximo una corrección");
         verify(queue, times(1)).finalizarTriageEIngresarACola(anyString(), any(), anyString(), any(Chat.class));
@@ -526,19 +528,9 @@ class ChatHardeningGeminiSmokeTest {
                 .filter(d -> d.sintomaId().equals("dolor:cabeza")
                         && d.estado() == ProgresoEntrevista.Estado.PENDIENTE)
                 .findFirst().orElseThrow();
-        if (objetivoSeleccionado.dimension() == ProgresoEntrevista.Dimension.INTENSIDAD) {
-            assertTrue(question.contains("dolor") || question.contains("cabeza"), question);
-        } else if (objetivoSeleccionado.dimension() == ProgresoEntrevista.Dimension.IMPACTO) {
-            assertTrue(question.matches("(?s).*(dificult|cuesta|molesta|limita|impide|caminar|dormir|comer|actividad|afecta).*"),
-                    question);
-        }
-        String respuesta = switch (objetivoSeleccionado.dimension()) {
-            case INTENSIDAD -> "6/10";
-            case IMPACTO -> "Me cuesta caminar por el dolor de cabeza.";
-            default -> throw new AssertionError("Gemini eligió un objetivo incompatible: "
-                    + objetivoSeleccionado.dimension());
-        };
-        service.enviarMensaje("8", "auth0|synthetic-smoke", respuesta);
+        assertEquals(ProgresoEntrevista.Dimension.INTENSIDAD, objetivoSeleccionado.dimension());
+        assertTrue(question.matches("(?s).*(?:(?:1|uno) (?:a|al) (?:10|diez)|entre (?:1|uno) y (?:10|diez)).*"), question);
+        service.enviarMensaje("8", "auth0|synthetic-smoke", "6/10");
 
         assertTrue(chat.isFinalizado());
         assertEquals(EstadoClasificacionChat.COMPLETADA, chat.getEstadoClasificacion());

@@ -26,8 +26,8 @@ locales. Gemini continúa redactando las preguntas y la clasificación final.
 ## Datos y estados
 
 `ProgresoEntrevista` identifica el síntoma destinatario y la dimensión pendiente:
-inicio/duración, intensidad del dolor, impacto de otra molestia o temperatura
-cuando hay fiebre. Dos síntomas distintos conservan sus propios datos; una
+inicio/duración, intensidad del dolor o temperatura cuando hay fiebre. El impacto
+funcional informado se conserva como dato opcional. Dos síntomas distintos conservan sus propios datos; una
 respuesta sobre uno no completa automáticamente al otro.
 
 Las preguntas de inicio pueden usar variantes como «cuántas horas o días hace que
@@ -126,13 +126,12 @@ acompaña el historial admitido en la continuación de texto; no contiene valore
 citas ni texto excluido y no forma parte del resultado clínico.
 
 El backend comprueba los desvíos reconocibles de la pregunta propuesta y el
-verificador remoto recibe el mismo objetivo. Una pregunta de temperatura no
-sustituye a la intensidad pendiente del dolor. Para ese mismo dolor se conserva
-la alternativa de preguntar por su impacto funcional. Una paráfrasis no reconocida
-localmente pasa a la verificación semántica, sin imponer una puntuación particular.
-Una aclaración conserva la dimensión efectiva preguntada: si se eligió impacto
-funcional para ese dolor, no vuelve a exigir una escala de intensidad. La
-invitación puede referirse a síntomas ya aportados, pero no sugerir otros nuevos.
+verificador remoto recibe el mismo objetivo. La pregunta de intensidad usa siempre
+la escala del 1 al 10, incluso en una aclaración. Una respuesta explícita de 0
+se conserva. Una pregunta de temperatura o impacto corresponde a otra dimensión.
+Se conservan las respuestas a preguntas de impacto de entrevistas anteriores.
+Ante un término ambiguo, se pide una aclaración neutral antes de registrarlo como
+síntoma. La invitación puede referirse a síntomas ya aportados.
 
 Al reconstruir el historial, una invitación no depende únicamente de frases como
 «algo más». Si el objetivo inmediatamente anterior al bot era `INVITACION`, una

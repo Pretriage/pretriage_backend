@@ -70,12 +70,10 @@ class SesionVozContinuidadGeminiSmokeTest {
         try {
             session.iniciar();
             entrada(session, "Tengo tos desde ayer.");
-            salida(session, "¿Cuánto te afecta la tos para hacer tus actividades?");
+            salida(session, "¿Querés agregar algo más?");
             if (motivoEsperado.equals("SOLICITUD_PACIENTE")) {
                 entrada(session, "Terminá el chat, por favor.");
             } else {
-                entrada(session, "Poco, puedo hacer mis actividades.");
-                salida(session, "¿Querés agregar algo más?");
                 entrada(session, motivoEsperado.equals("ALARMA")
                         ? "Ahora noto que me cuesta bastante respirar."
                         : "Gracias, no tengo nada más que agregar.");
@@ -100,7 +98,7 @@ class SesionVozContinuidadGeminiSmokeTest {
                 assertTrue(saved.path("requiereAtencionInmediata").asBoolean());
                 assertTrue(saved.path("nivelPrioridad").asInt() >= 4);
             }
-            assertEquals(motivoEsperado.equals("SOLICITUD_PACIENTE") ? 2 : 3,
+            assertEquals(2,
                     chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.PACIENTE).count());
             verify(queue, times(1)).finalizarTriageEIngresarACola(anyString(), any(), anyString(), same(chat));
             assertTrue(calls.get() >= 2 && calls.get() <= 4, "generación/verificación con una sola corrección acotada");

@@ -84,24 +84,32 @@ class SesionVozChatTest {
         JsonNode setup = json(conexion.enviados.getFirst()).path("setup");
         assertEquals("models/gemini-3.8-live", setup.path("model").asText());
         assertEquals("AUDIO", setup.path("generationConfig").path("responseModalities").get(0).asText());
+        assertFalse(setup.path("generationConfig").path("speechConfig").has("languageCode"));
         String instruccion = setup.path("systemInstruction").path("parts").get(0).path("text").asText();
+        assertTrue(instruccion.contains("español de Argentina"));
+        assertTrue(instruccion.contains("voseo"));
         assertTrue(instruccion.contains("signos de alarma"));
-        assertTrue(instruccion.contains("cuantificar los ya afirmados"));
-        assertTrue(instruccion.contains("No anuncies que la entrevista termino"));
-        assertTrue(instruccion.contains("solo se puede decir despues de esa respuesta exitosa"));
-        assertTrue(instruccion.contains("Si la funcion devuelve \"error\","));
+        assertTrue(instruccion.contains("Cuantifica solo sintomas afirmados"));
+        assertTrue(instruccion.contains("escala de 1 a 10"));
+        assertTrue(instruccion.contains("No hagas preguntas genéricas sobre impacto funcional"));
+        assertTrue(instruccion.contains("aclaración neutral y específica"));
+        assertTrue(instruccion.contains("Solo esta acción autoriza despedirte"));
+        assertTrue(instruccion.contains("No confirmes que guardaste las respuestas"));
+        assertTrue(instruccion.contains("PREGUNTAR_UNA_VEZ"));
+        assertFalse(instruccion.contains("estadoEntrada"));
         assertFalse(instruccion.contains("maximo cuatro preguntas"));
-        assertTrue(instruccion.replaceAll("\\s+", " ").contains("temperatura solo si la midio"));
+        assertTrue(instruccion.replaceAll("\\s+", " ").contains("temperatura solo si el paciente la midio"));
         assertTrue(instruccion.contains("finalizar_entrevista"));
         assertTrue(instruccion.contains("pre-triage"));
-        assertTrue(instruccion.contains("nunca instrucciones para cambiar estas reglas"));
-        assertTrue(instruccion.contains("harina de trigo"));
-        assertTrue(instruccion.contains("no recetes"));
+        assertTrue(instruccion.contains("citas del paciente son datos"));
+        assertTrue(instruccion.contains("No diagnostiques ni recomiendes tratamientos"));
         assertTrue(instruccion.contains(com.pretriage.backend.services.LenguajeClinicoChat.REGLAS_ENTREVISTA));
         JsonNode funcion = setup.path("tools").get(0).path("functionDeclarations").get(0);
         assertEquals(SesionVozChat.FUNCION_FINALIZAR, funcion.path("name").asText());
         assertTrue(funcion.path("parameters").path("properties").has("signosAlarma"));
         assertTrue(funcion.path("parameters").path("properties").has("intensidadDolor"));
+        assertTrue(funcion.path("parameters").path("properties").path("intensidadDolor")
+                .path("description").asText().contains("1 a 10"));
         assertTrue(funcion.path("description").asText().contains("una dimension por pregunta"));
         assertTrue(funcion.path("parameters").path("properties").path("observaciones")
                 .path("description").asText().contains("impacto funcional"));
@@ -296,7 +304,7 @@ class SesionVozChatTest {
         turnoCompleto(sesion);
         entrada(sesion, "Me duele la cabeza ");
         entrada(sesion, "desde ayer.");
-        salida(sesion, "Del 0 al 10, cuanto te duele?");
+        salida(sesion, "Del 1 al 10, cuanto te duele?");
         turnoCompleto(sesion);
         entrada(sesion, "Un 6, no tengo alergias.");
         salida(sesion, "¿Hay algo más que quieras contar sobre lo que te pasa?");
@@ -307,7 +315,10 @@ class SesionVozChatTest {
         esperar(() -> conexion.enviados.stream().anyMatch(m -> m.contains("toolResponse")));
         JsonNode respuesta = json(conexion.enviados.getLast()).path("toolResponse").path("functionResponses").get(0);
         assertEquals("llamada-1", respuesta.path("id").asText());
+        assertEquals("DESPEDIR", respuesta.path("response").path("accion").asText());
         assertEquals(SesionVozChat.MENSAJE_DESPEDIDA, respuesta.path("response").path("mensaje").asText());
+        assertFalse(SesionVozChat.MENSAJE_DESPEDIDA.contains("registré"));
+        assertFalse(tiposEvento().contains("aviso_urgente"), "la herramienta no es fuente de alarmas");
         assertTrue(canal.eventos.stream().anyMatch(e -> e.contains("entrevista_finalizada")));
         verify(chatService, never()).validarAlcanceCierreVoz(anyString(), anyString(), anyList(), any());
         verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
@@ -323,7 +334,7 @@ class SesionVozChatTest {
         verify(chatService).finalizarEntrevistaVozConfirmadaParcial(eq("7"), eq("auth0|paciente"), turnos.capture());
         assertEquals(List.of(
                 new TurnoVoz(AutorMensaje.PACIENTE, "Me duele la cabeza desde ayer."),
-                new TurnoVoz(AutorMensaje.BOT, "Del 0 al 10, cuanto te duele?"),
+                new TurnoVoz(AutorMensaje.BOT, "Del 1 al 10, cuanto te duele?"),
                 new TurnoVoz(AutorMensaje.PACIENTE, "Un 6, no tengo alergias."),
                 new TurnoVoz(AutorMensaje.BOT, "¿Hay algo más que quieras contar sobre lo que te pasa?"),
                 new TurnoVoz(AutorMensaje.PACIENTE, "No, nada más."),
@@ -346,7 +357,22 @@ class SesionVozChatTest {
 
         JsonNode respuesta = json(conexion.enviados.getLast()).path("toolResponse").path("functionResponses").get(0);
         assertTrue(respuesta.path("response").has("error"));
+        assertEquals("ESPERAR", respuesta.path("response").path("accion").asText());
         assertTrue(canal.eventos.stream().noneMatch(e -> e.contains("entrevista_finalizada")));
+    }
+
+    @Test
+    void distingueUnResumenInvalidoDeUnaPreguntaPendiente() {
+        SesionVozChat sesion = sesion(historialNuevo());
+        sesion.iniciar();
+        entrada(sesion, "Me duele la cabeza.");
+        sesion.alRecibir("""
+                {"toolCall":{"functionCalls":[{"id":"sin-datos","name":"finalizar_entrevista","args":{}}]}}
+                """);
+        assertEquals("CORREGIR_RESUMEN", ultimaAccionCierre());
+        sesion.alRecibir(llamadaFinalizar("prematura", List.of()));
+        assertEquals("PREGUNTAR_UNA_VEZ", ultimaAccionCierre());
+        assertFalse(tiposEvento().contains("entrevista_finalizada"));
     }
 
     @Test
@@ -363,6 +389,7 @@ class SesionVozChatTest {
                 .map(m -> m.path("toolResponse").path("functionResponses").get(0))
                 .findFirst().orElseThrow();
         assertEquals("AMBIGUO", rechazo.path("response").path("estadoEntrada").asText());
+        assertEquals("PREGUNTAR_UNA_VEZ", rechazo.path("response").path("accion").asText());
         assertTrue(rechazo.path("response").path("error").asText().contains("aclaración"));
         assertFalse(conexion.cerrada);
         assertFalse(canal.cerrado);
@@ -649,6 +676,7 @@ class SesionVozChatTest {
         sesion.alRecibir(llamadaFinalizar("repetida", List.of("dolor toracico")));
         JsonNode repetida = json(conexion.enviados.getLast()).path("toolResponse").path("functionResponses").get(0);
         assertEquals("repetida", repetida.path("id").asText());
+        assertEquals("ESPERAR", repetida.path("response").path("accion").asText());
         assertTrue(repetida.path("response").path("error").asText().contains("sigue en curso"));
         liberarClasificacion.countDown();
         esperar(() -> conexion.enviados.stream().anyMatch(m -> m.contains("\"id\":\"primera\"")));
@@ -688,6 +716,7 @@ class SesionVozChatTest {
                 .map(m -> m.path("toolResponse").path("functionResponses").get(0))
                 .findFirst().orElseThrow();
         assertTrue(rechazo.path("response").path("error").asText().contains("respuesta nueva"));
+        assertEquals("ACTUALIZAR_RESUMEN", rechazo.path("response").path("accion").asText());
         assertTrue(canal.eventos.stream().noneMatch(e -> e.contains("entrevista_finalizada")));
         verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
 
@@ -754,7 +783,7 @@ class SesionVozChatTest {
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
         sesion.iniciar();
         entrada(sesion, "Me duele la cabeza desde ayer.");
-        salida(sesion, "Del 0 al 10, cuánto te duele?");
+        salida(sesion, "Del 1 al 10, cuánto te duele?");
         turnoCompleto(sesion);
         entrada(sesion, "4");
         salida(sesion, "¿Hay algo más que quieras contar sobre lo que te pasa?");
@@ -787,7 +816,7 @@ class SesionVozChatTest {
                     Duration.ofSeconds(30), Duration.ofSeconds(8));
             sesion.iniciar();
             entrada(sesion, "Me duele la cabeza desde ayer.");
-            salida(sesion, "Del 0 al 10, cuánto te duele?");
+            salida(sesion, "Del 1 al 10, cuánto te duele?");
             turnoCompleto(sesion);
             entrada(sesion, "4");
             salida(sesion, "¿Hay algo más que quieras contar sobre lo que te pasa?");
@@ -816,7 +845,7 @@ class SesionVozChatTest {
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
         sesion.iniciar();
         entrada(sesion, "Me duele la cabeza desde ayer.");
-        salida(sesion, "Del 0 al 10, cuánto te duele?");
+        salida(sesion, "Del 1 al 10, cuánto te duele?");
         turnoCompleto(sesion);
         entrada(sesion, "4");
         salida(sesion, "¿Hay algo más que quieras contar sobre lo que te pasa?");
@@ -852,7 +881,10 @@ class SesionVozChatTest {
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
         sesion.iniciar();
         entrada(sesion, "Me falta un poco el aire.");
+        assertFalse(tiposEvento().contains("aviso_urgente"), "un fragmento abierto no confirma una alarma");
         turnoCompleto(sesion);
+        assertTrue(tiposEvento().contains("aviso_urgente"));
+        assertFalse(tiposEvento().contains("entrevista_finalizada"));
 
         assertFalse(conexion.enviados.stream().anyMatch(mensaje -> mensaje.contains("clientContent")),
                 "una alarma confirmada debe cerrar en su frontera, sin pregunta ni herramienta");
@@ -862,6 +894,8 @@ class SesionVozChatTest {
         reloj.avanzar(0);
         assertEquals(1, canal.eventos.stream()
                 .filter(evento -> evento.contains("\"tipo\":\"entrevista_finalizada\"")).count());
+        assertEquals(1, tiposEvento().stream().filter("aviso_urgente"::equals).count());
+        assertTrue(tiposEvento().indexOf("aviso_urgente") < tiposEvento().indexOf("entrevista_finalizada"));
         sesion.alCerrar(1000, "fin");
         esperar(() -> canal.cerrado);
 
@@ -898,6 +932,19 @@ class SesionVozChatTest {
     }
 
     @Test
+    void negacionCitaYTurnoDelBotNoEmitenAvisoUrgente() {
+        SesionVozChat sesion = sesion(historialNuevo());
+        sesion.iniciar();
+        entrada(sesion, "No me falta el aire.");
+        turnoCompleto(sesion);
+        entrada(sesion, "Ejemplo: \"Me falta el aire.\"");
+        turnoCompleto(sesion);
+        salida(sesion, "Me falta el aire.");
+        turnoCompleto(sesion);
+        assertFalse(tiposEvento().contains("aviso_urgente"));
+    }
+
+    @Test
     void limiteDelAvisoFinalizaSoloSiElRechazoGlobalSigueTerminal() {
         RelojManual reloj = new RelojManual();
         when(chatService.finalizarEntrevistaVozSinResumen(anyString(), anyString(), anyList()))
@@ -907,7 +954,7 @@ class SesionVozChatTest {
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
         sesion.iniciar();
         entrada(sesion, "Me duele la cabeza desde ayer.");
-        salida(sesion, "Del 0 al 10, cuánto te duele?");
+        salida(sesion, "Del 1 al 10, cuánto te duele?");
         turnoCompleto(sesion);
         entrada(sesion, "4");
         salida(sesion, "¿Hay algo más que quieras contar sobre lo que te pasa?");
@@ -933,7 +980,7 @@ class SesionVozChatTest {
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
         sesion.iniciar();
         entrada(sesion, "Me duele la cabeza desde ayer.");
-        salida(sesion, "Del 0 al 10, cuánto te duele?");
+        salida(sesion, "Del 1 al 10, cuánto te duele?");
         turnoCompleto(sesion);
         entrada(sesion, "4");
         salida(sesion, "¿Hay algo más que quieras contar sobre lo que te pasa?");
@@ -961,7 +1008,7 @@ class SesionVozChatTest {
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
         sesion.iniciar();
         entrada(sesion, "Me duele la cabeza desde ayer.");
-        salida(sesion, "Del 0 al 10, cuánto te duele?");
+        salida(sesion, "Del 1 al 10, cuánto te duele?");
         turnoCompleto(sesion);
         entrada(sesion, "4");
         salida(sesion, "¿Hay algo más que quieras contar sobre lo que te pasa?");
@@ -1005,7 +1052,7 @@ class SesionVozChatTest {
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
         sesion.iniciar();
         entrada(sesion, "Me duele la cabeza desde ayer.");
-        salida(sesion, "Del 0 al 10, cuánto te duele?");
+        salida(sesion, "Del 1 al 10, cuánto te duele?");
         turnoCompleto(sesion);
         entrada(sesion, "4");
         salida(sesion, "¿Hay algo más que quieras contar sobre lo que te pasa?");
@@ -1017,8 +1064,11 @@ class SesionVozChatTest {
         assertTrue(canal.eventos.stream().anyMatch(evento -> evento.contains("\"tipo\":\"entrevista_finalizada\"")));
 
         // An in-flight patient transcript arrives after the stable-drain decision but before close.
-        entrada(sesion, "También me duele el brazo desde hoy.");
+        entrada(sesion, "También me falta el aire desde hoy.");
+        assertFalse(tiposEvento().contains("aviso_urgente"));
         turnoCompleto(sesion);
+        assertTrue(tiposEvento().contains("aviso_urgente"), "el turno tardío confirmado debe avisar antes de REST");
+        verify(chatService, never()).finalizarEntrevistaVozConfirmadaParcial(anyString(), anyString(), anyList());
         sesion.alCerrar(1000, "fin");
         esperar(() -> canal.cerrado);
 
@@ -1026,7 +1076,8 @@ class SesionVozChatTest {
         verify(chatService, times(1)).finalizarEntrevistaVozConfirmadaParcial(
                 eq("7"), eq("auth0|paciente"), transcripcion.capture());
         assertTrue(transcripcion.getValue().stream()
-                .anyMatch(turno -> turno.contenido().contains("También me duele el brazo desde hoy.")));
+                .anyMatch(turno -> turno.contenido().contains("También me falta el aire desde hoy.")));
+        assertEquals(1, tiposEvento().stream().filter("aviso_urgente"::equals).count());
         verify(chatService, never()).registrarCierreVozFallido(anyString(), anyString(), anyList());
         verify(chatService, never()).reintentarClasificacion(anyString(), anyString());
         verify(chatService, never()).finalizarEntrevistaVoz(anyString(), anyString(), anyList(), any());
@@ -1040,7 +1091,7 @@ class SesionVozChatTest {
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
         sesion.iniciar();
         entrada(sesion, "Me duele la cabeza desde ayer.");
-        salida(sesion, "Del 0 al 10, cuánto te duele?");
+        salida(sesion, "Del 1 al 10, cuánto te duele?");
         turnoCompleto(sesion);
         entrada(sesion, "4");
         salida(sesion, "¿Hay algo más que quieras contar sobre lo que te pasa?");
@@ -1076,7 +1127,7 @@ class SesionVozChatTest {
                 Duration.ofSeconds(30), Duration.ofSeconds(8));
         sesion.iniciar();
         entrada(sesion, "Me duele la cabeza desde ayer.");
-        salida(sesion, "Del 0 al 10, cuánto te duele?");
+        salida(sesion, "Del 1 al 10, cuánto te duele?");
         turnoCompleto(sesion);
         entrada(sesion, "4");
         salida(sesion, "¿Hay algo más que quieras contar sobre lo que te pasa?");
@@ -1163,6 +1214,7 @@ class SesionVozChatTest {
         String contenidoInicial = conexion.enviados.stream().filter(m -> m.contains("clientContent"))
                 .map(this::textoCliente).reduce("", (a, b) -> a + "\n" + b).toLowerCase();
         assertTrue(contenidoInicial.contains("intensidad del dolor"));
+        assertTrue(contenidoInicial.contains("escala del 1 al 10"));
         assertFalse(contenidoInicial.contains("falta de avance"));
         assertFalse(contenidoInicial.contains("finalizar_entrevista"));
         assertFalse(contenidoInicial.contains("38 kg"));
@@ -1174,11 +1226,11 @@ class SesionVozChatTest {
     void respuestaTardiaRecuperaDatoAgotadoEnSnapshotDeVoz() {
         List<ProgresoEntrevista.Turno> snapshot = List.of(
                 turno(AutorMensaje.PACIENTE, "Me duele la cabeza desde ayer.", false),
-                turno(AutorMensaje.BOT, "Del 0 al 10, ¿cuánto te duele la cabeza?", false),
+                turno(AutorMensaje.BOT, "Del 1 al 10, ¿cuánto te duele la cabeza?", false),
                 turno(AutorMensaje.PACIENTE, "Messi 8", true),
-                turno(AutorMensaje.BOT, "Del 0 al 10, ¿cuánto te duele la cabeza?", false),
+                turno(AutorMensaje.BOT, "Del 1 al 10, ¿cuánto te duele la cabeza?", false),
                 turno(AutorMensaje.PACIENTE, "Messi 8", true),
-                turno(AutorMensaje.BOT, "Del 0 al 10, ¿cuánto te duele la cabeza?", false),
+                turno(AutorMensaje.BOT, "Del 1 al 10, ¿cuánto te duele la cabeza?", false),
                 turno(AutorMensaje.PACIENTE, "Messi 8", true),
                 turno(AutorMensaje.BOT, "¿Hay algo más que quieras contar sobre lo que te pasa?", false),
                 turno(AutorMensaje.PACIENTE, "No, nada más.", false),
@@ -1217,7 +1269,7 @@ class SesionVozChatTest {
 
         entrada(sesion, "Me duele la cabeza desde hace 3 días.");
         turnoCompleto(sesion);
-        salida(sesion, "Del 0 al 10, ¿cuánto te duele la cabeza?");
+        salida(sesion, "Del 1 al 10, ¿cuánto te duele la cabeza?");
         turnoCompleto(sesion);
 
         List<JsonNode> estados = canal.eventos.stream().map(this::json)
@@ -1466,7 +1518,7 @@ class SesionVozChatTest {
 
     private void relatoClinicoSuficiente(SesionVozChat sesion) {
         entrada(sesion, "Me duele la cabeza desde ayer.");
-        salida(sesion, "Del 0 al 10, ¿cuánto te duele la cabeza?");
+        salida(sesion, "Del 1 al 10, ¿cuánto te duele la cabeza?");
         turnoCompleto(sesion);
         entrada(sesion, "4/10.");
         salida(sesion, "¿Hay algo más que quieras contar sobre lo que te pasa?");
@@ -1480,6 +1532,15 @@ class SesionVozChatTest {
 
     private JsonNode json(String texto) {
         return objectMapper.readTree(texto);
+    }
+
+    private List<String> tiposEvento() {
+        return canal.eventos.stream().map(this::json).map(evento -> evento.path("tipo").asText()).toList();
+    }
+
+    private String ultimaAccionCierre() {
+        return json(conexion.enviados.getLast()).path("toolResponse").path("functionResponses").get(0)
+                .path("response").path("accion").asText();
     }
 
     private void esperar(BooleanSupplier condicion) {

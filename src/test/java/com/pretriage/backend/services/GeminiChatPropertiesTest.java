@@ -16,7 +16,7 @@ class GeminiChatPropertiesTest {
                 "pretriage.ia.gemini.max-output-tokens", "4096"));
         var config = new Binder(source).bind("pretriage.ia.gemini", Bindable.of(GeminiChatProperties.class)).get();
         assertEquals(4096, config.maxOutputTokens());
-        assertEquals("gemini-3.5-flash-lite", config.model());
+        assertEquals("gemini-3.8-flash", config.model());
         source = new MapConfigurationPropertySource(Map.of("pretriage.ia.gemini.api-key", "test"));
         config = new Binder(source).bind("pretriage.ia.gemini", Bindable.of(GeminiChatProperties.class)).get();
         assertEquals(8192, config.maxOutputTokens());

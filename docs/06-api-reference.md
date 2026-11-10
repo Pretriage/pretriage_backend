@@ -355,7 +355,8 @@ Example response:
 GET /api/hospitales/{idHospital}/tiempo-arribo?transporte=transporte-publico&latitud=-34.6&longitud=-58.4
 ```
 
-Returns list with routes with estimated travel time from patient's location to the specified hospital.
+Returns routes with estimated travel time from the patient's location to the specified hospital.
+Route steps without navigation instructions from Google are returned with `indicaciones: ""`.
 
 ## User Profile
 
@@ -608,6 +609,12 @@ Server -> client:
   error, session end or a useful assistant question.
 - `{"tipo":"turno_completo"}`, `{"tipo":"sesion_por_expirar"}`,
   `{"tipo":"error","mensaje":...}`.
+- `{"tipo":"aviso_urgente","mensaje":...}`: fixed patient-facing guidance for
+  a locally recognized alarm in a confirmed turn. Sent once per voice session,
+  before the classification starts. An alarm confirmed before closure sends the
+  notice before `entrevista_finalizada`; a turn confirmed during the drain can
+  send it afterwards. The client displays it through processing and recovery of
+  the same chat. Older clients ignore the additive event.
 - `{"tipo":"entrevista_finalizada","resumen":ResumenEntrevistaVoz}`: the backend
   confirmed interview closure; microphone audio is ignored from now on. `resumen`
   is optional: it is absent when the backend recovers a missing Live tool call

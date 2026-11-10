@@ -6,9 +6,11 @@ short question about one datum or concept per turn, as instructed to Gemini, in 
 lists. Interview progress tracks resolved data for each reported symptom, with one
 open invitation. Separate technical budgets allow 24 total patient turns, three
 attempts per datum and four consecutive replies without progress; reaching a budget
-is recorded as partial closure, not complete data. It can ask about onset or duration and how a reported symptom affects the
-patient. Pain may be quantified on a 0–10 scale or by its effect on daily activities;
-temperature is requested only when the patient measured it. Unknown or unmeasured
+is recorded as partial closure, not complete data. The bot can ask about onset or duration.
+Every pain-intensity question explicitly uses a 1–10 scale. An explicit zero remains
+a valid reported value. The bot records volunteered functional impact in observations
+and keeps it separate from pain intensity and the required interview data.
+Temperature is requested only when the patient measured it. Unknown or unmeasured
 values stay unknown without repeated prompts. Information about one symptom is never
 applied to another, and the bot does not introduce unrelated symptoms. Saying there
 are no other symptoms stops the search for new symptoms but still permits bounded
@@ -51,7 +53,7 @@ against the Gemini REST `generateContent` API. Speech interaction remains on Gem
 
 ```properties
 pretriage.ia.gemini.api-key=${GEMINI_API_KEY:}
-pretriage.ia.gemini.model=${GEMINI_CHAT_MODEL:gemini-3.5-flash-lite}
+pretriage.ia.gemini.model=${GEMINI_CHAT_MODEL:gemini-3.8-flash}
 pretriage.ia.gemini.base-url=${GEMINI_API_BASE_URL:https://generativelanguage.googleapis.com/v1beta}
 pretriage.ia.gemini.connect-timeout=5s
 pretriage.ia.gemini.request-timeout=${GEMINI_REQUEST_TIMEOUT:45s}
@@ -62,15 +64,16 @@ pretriage.ia.gemini.retry-initial-backoff=${GEMINI_RETRY_INITIAL_BACKOFF:500ms}
 ```
 
 The key is sent in `x-goog-api-key` and stays in the backend. Requests use
-temperature zero and `generationConfig.responseFormat.text.mimeType=APPLICATION_JSON`
-with JSON Schema. The REST client makes up to two HTTP attempts per Gemini request
+`generationConfig.responseFormat.text.mimeType=APPLICATION_JSON`
+with JSON Schema. For `gemini-3.8-flash`, the client requests `thinkingLevel=LOW`
+to limit response latency. The REST client makes up to two HTTP attempts per Gemini request
 within the operation budget. The normal budget is 45 seconds; a corrective request
 uses the time remaining from the same budget. Eligible transient transport/HTTP
 errors are retried under the bounded policy in [Gemini REST retries](19-gemini-retries.md).
 Quota exhaustion without a valid `Retry-After`, missing configuration, blocked or
 truncated responses and invalid JSON remain provider errors in chat; reception forms
 retain their local fallback. Response bodies and clinical text are not logged.
-Temperature zero does not guarantee identical classifications across calls.
+Gemini may return different classifications across calls.
 
 REST output is bounded to 8192 tokens by default (previously fixed at 2048),
 configurable through `GEMINI_MAX_OUTPUT_TOKENS` between 1 and 65536; the configured
@@ -237,11 +240,9 @@ patient; Gemini REST produces the final preclassification:
 
 1. The backend (`SesionVozChat`) proxies client audio to Gemini Live over
    `BidiGenerateContent`, so the API key never reaches the browser.
-2. Gemini's system instruction follows the same brief, evidence-led interview as
-   text: no minimum answer count or full checklist, no diagnosis or priority, and
-   only focused questions for information that matters. It allows at most four
-   quantification questions about symptoms already named, plus one open invitation;
-   each question covers one concept. A patient who says there are no other symptoms
+2. Gemini Live speaks brief Argentine Spanish with voseo and follows the same
+   evidence-led interview as text. It asks about one pertinent datum per turn and
+   uses one open invitation to add information. A patient who says there are no other symptoms
    stops the search for new symptoms but may still be asked bounded questions about
    the symptoms already named. An explicit wish not to continue ends the interview.
    Unknown measurements are left unknown without repetition, and a clear alarm closes
@@ -259,9 +260,9 @@ patient; Gemini REST produces the final preclassification:
     voice policy: one open invitation, resolved or explicitly unknown/declined data
     for reported symptoms, bounded clarification attempts and total resources, and
     immediate closure for a clear alarm or an explicit wish to stop.
-    The validator still requires a structurally valid
-    summary and patient evidence. Rejected calls return a corrective tool error and
-    keep the interview open.
+     The validator still requires a structurally valid summary and patient evidence.
+     The tool response distinguishes waiting, correcting a malformed summary,
+     updating it after new input, asking one pending question and saying goodbye.
    `ChatService.validarAlcanceCierreVoz` also performs a read-only REST scope check
    before closure is accepted. Ambiguous/off-topic cases return a corrective tool
    response and keep the voice interview open, unless an independent resource limit
@@ -269,13 +270,16 @@ patient; Gemini REST produces the final preclassification:
    If new patient input arrives during
    the check, the old snapshot cannot authorize closure. The final classification
    still waits for late transcriptions and normal transport close.
-5. The backend stops sending microphone audio and signals `audioStreamEnd`.
+5. For a locally recognized alarm in a confirmed turn, the backend sends one
+   `aviso_urgente` to mobile before REST classification. Mobile displays it above
+   the classification status, including during processing or recovery.
+   When closing, the backend stops forwarding microphone audio and signals `audioStreamEnd`.
    After Gemini's goodbye turn it drains late input transcriptions, requests
    transport closure and waits for normal close confirmation. Only then
-   `ChatService.finalizarEntrevistaVoz` sends the summary plus the patient
-   transcription to Gemini REST (`FINAL_SYSTEM_PROMPT` + voice clause: on conflict the
-   transcription prevails). Once closure is accepted, it adds the transcription,
-   closes the interview and starts classification. If recovery cannot produce a valid
+   `ChatService.finalizarEntrevistaVoz` saves the transcription and classifies the
+   admitted turns through Gemini REST. Only confirmed patient turns support clinical
+   claims. The spoken goodbye acknowledges closure and upcoming processing. The
+   final chat message confirms registration after persistence. If recovery cannot produce a valid
    result, the interview closes as `PARCIAL`, without an AI result or queue update;
    transient API outages remain in automatic recovery.
 6. The Gemini REST result goes through the same validation, priority mapping,
@@ -387,8 +391,11 @@ includes its `recomendacionSeguridad`, even if the model's `mensaje` omits it.
 
 Each intermediate text request asks Gemini for `mensaje` and `estadoEntrada`; the backend decides
 whether the interview remains open or moves to final classification. The prompt
-instructs Gemini to ask about one datum per turn, and `LenguajeClinicoChat.REGLAS_PREGUNTA_TEXTO`
-keeps closure instructions out of the question-writing task. An incompatible
+uses `objetivoDelTurno` to select the exact symptom and datum or the one open invitation.
+A mixed turn remains `RELEVANTE` when it contains a clear clinical fact or a pertinent
+answer. Its original text stays in the chat and only the pertinent information supports
+the result. A scope decision that contradicts a locally recognized fact is eligible for
+the same bounded correction before the turn can be excluded. An incompatible
 intermediate response or repeated question can receive at most one remote correction for that turn. Question-mark
 count and punctuation are not validity checks and do not trigger a format correction
 or HTTP 500. Relevant Gemini questions are preserved; scope decisions select a
@@ -403,6 +410,12 @@ collecting answers, failed text turns still roll back the undelivered patient
 message. Once final classification is requested, accepted answers are preserved;
 failure to produce a valid result closes as `PARCIAL`, with no AI result or queue
 priority update.
+
+Final classification has two provider response branches. `RELEVANTE` returns
+`finalizado=true` with a complete result and literal patient evidence for symptoms
+and alarms. `AMBIGUO` and `FUERA_DE_CONTEXTO` return `finalizado=false`, `resultado=null`,
+empty evidence and a neutral message. The backend decides whether to close administratively.
+An affirmed alarm requires immediate attention and priority 4 or 5 on the existing scale.
 
 ## Priority Mapping
 

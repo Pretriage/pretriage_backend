@@ -9,6 +9,8 @@ import java.time.Duration;
 public record GeminiChatProperties(String apiKey, String model, String baseUrl,
                                    Duration connectTimeout, Duration requestTimeout, Integer maxOutputTokens,
                                    Integer maxAttempts, Duration attemptTimeout, Duration retryInitialBackoff) {
+    static final String GEMINI_3_8_FLASH = "gemini-3.8-flash";
+
     public GeminiChatProperties(String apiKey, String model, String baseUrl,
                                 Duration connectTimeout, Duration requestTimeout) {
         this(apiKey, model, baseUrl, connectTimeout, requestTimeout, null, null, null, null);
@@ -21,7 +23,7 @@ public record GeminiChatProperties(String apiKey, String model, String baseUrl,
 
     @ConstructorBinding
     public GeminiChatProperties {
-        if (model == null || model.isBlank()) model = "gemini-3.5-flash-lite";
+        if (model == null || model.isBlank()) model = GEMINI_3_8_FLASH;
         if (baseUrl == null || baseUrl.isBlank()) baseUrl = "https://generativelanguage.googleapis.com/v1beta";
         if (connectTimeout == null) connectTimeout = Duration.ofSeconds(5);
         if (requestTimeout == null) requestTimeout = Duration.ofSeconds(45);

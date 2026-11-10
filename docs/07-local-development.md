@@ -18,7 +18,7 @@ the image with a disposable PostgreSQL and no real provider credentials.
 ## Important Properties
 
 ```properties
-pretriage.ia.gemini.model=${GEMINI_CHAT_MODEL:gemini-3.5-flash-lite}
+pretriage.ia.gemini.model=${GEMINI_CHAT_MODEL:gemini-3.8-flash}
 pretriage.ia.gemini.api-key=${GEMINI_API_KEY:}
 pretriage.ia.gemini.request-timeout=${GEMINI_REQUEST_TIMEOUT:45s}
 pretriage.ia.gemini.max-output-tokens=${GEMINI_MAX_OUTPUT_TOKENS:8192}
@@ -36,9 +36,10 @@ spring.jpa.hibernate.ddl-auto=${JPA_DDL_AUTO:create-drop}
 pretriage.voz.gemini.api-key=${GEMINI_API_KEY:}
 pretriage.voz.gemini.modelo=${GEMINI_LIVE_MODEL:models/gemini-3.8-live}
 pretriage.voz.gemini.voz=${GEMINI_LIVE_VOICE:Kore}
-pretriage.voz.gemini.idioma=${GEMINI_LIVE_LANGUAGE:es-US}
 pretriage.voz.origenes-permitidos=${PRETRIAGE_VOZ_ORIGENES:*}
 ```
+
+The Gemini Live system instruction sets the spoken language to Argentine Spanish.
 
 The estimated-attention SSE endpoint sends `tiempo-estimado` and `heartbeat`
 events. Closing the client connection is an expected end of that stream: its
@@ -522,7 +523,7 @@ with `python scripts/test_backend_isolated.py`, including for password-change te
 ### Gemini unavailable
 
 Set `GEMINI_API_KEY` in the ignored `.env` and optionally `GEMINI_CHAT_MODEL`.
-The REST default is `gemini-3.5-flash-lite`; the audio default is `models/gemini-3.8-live`.
+The REST default is `gemini-3.8-flash` and the audio default is `models/gemini-3.8-live`.
 Restart the backend after configuration changes. Keys are never needed in mobile.
 Missing keys, exhausted transient retries, quota exhaustion without a usable
 `Retry-After`, safety blocks or invalid output fail text/final voice classification

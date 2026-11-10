@@ -38,12 +38,15 @@ dato y cuatro respuestas consecutivas sin avance. Al agotarse un dato se contin�
 con los restantes; el agotamiento se distingue de una respuesta clínica conocida.
 Cada turno trata un solo concepto o dato, según las reglas que se indican al modelo. El bot aprovecha
 la información espontánea y no vuelve a preguntar lo que
-ya quedó respondido. Para dolor puede preguntar intensidad de 0 a 10 o el impacto en
-las actividades cotidianas; para fiebre puede pedir la temperatura solo si el
+ya quedó respondido. Si falta la intensidad de un dolor, pregunta en una escala del
+1 al 10. Si el paciente informa 0 de manera explícita, se conserva el valor. La
+pregunta genérica por actividades queda fuera del recorrido habitual. Si una
+molestia es ambigua, primero pide que explique qué siente en sus palabras. Para
+fiebre puede pedir la temperatura solo si el
 paciente la midió. Si no sabe la cifra o no tiene una medición, ese dato queda como
 desconocido y no se insiste. Como el resultado estructurado no tiene campos
 específicos para temperatura e impacto, una temperatura medida se conserva con su
-unidad en los síntomas u observaciones y el impacto en observaciones.
+unidad en los síntomas u observaciones y el impacto espontáneo en observaciones.
 
 Una respuesta como «no tengo otros síntomas» detiene la búsqueda de síntomas nuevos,
 pero permite completar la cuantificación de los síntomas que el paciente ya nombró,

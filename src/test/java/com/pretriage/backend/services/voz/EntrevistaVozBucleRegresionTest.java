@@ -11,7 +11,6 @@ import java.util.List;
 
 import static com.pretriage.backend.services.entrevista.ProgresoEntrevista.Dimension.INICIO;
 import static com.pretriage.backend.services.entrevista.ProgresoEntrevista.Dimension.INTENSIDAD;
-import static com.pretriage.backend.services.entrevista.ProgresoEntrevista.Dimension.IMPACTO;
 import static com.pretriage.backend.services.entrevista.ProgresoEntrevista.Dimension.TEMPERATURA;
 import static com.pretriage.backend.services.entrevista.ProgresoEntrevista.Estado.AGOTADO;
 import static com.pretriage.backend.services.entrevista.ProgresoEntrevista.Estado.PENDIENTE;
@@ -21,6 +20,7 @@ import static com.pretriage.backend.services.entrevista.ProgresoEntrevista.Motiv
 import static com.pretriage.backend.services.entrevista.ProgresoEntrevista.MotivoCierre.DATOS_RESUELTOS;
 import static com.pretriage.backend.services.entrevista.ProgresoEntrevista.MotivoCierre.EN_CURSO;
 import static com.pretriage.backend.services.entrevista.ProgresoEntrevista.TipoObjetivo.DATO;
+import static com.pretriage.backend.services.entrevista.ProgresoEntrevista.TipoObjetivo.INVITACION;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -98,11 +98,8 @@ class EntrevistaVozBucleRegresionTest {
         ProgresoEntrevista.Dato temperatura = dato(progreso, "fiebre", TEMPERATURA);
         assertEquals(AGOTADO, temperatura.estado());
         assertEquals(ProgresoEntrevista.MAX_INTENTOS_POR_DATO, temperatura.intentos());
-        assertEquals(PENDIENTE, dato(progreso, "sintoma:tos", IMPACTO).estado());
         assertEquals(EN_CURSO, progreso.motivoCierre());
-        assertEquals(DATO, progreso.objetivoDelTurno().tipo());
-        assertEquals("sintoma:tos", progreso.objetivoDelTurno().sintomaId());
-        assertEquals(IMPACTO, progreso.objetivoDelTurno().dimension());
+        assertEquals(INVITACION, progreso.objetivoDelTurno().tipo());
         assertTrue(progreso.validarPreguntaPropuesta("¿Cuántos grados marcó el termómetro?").isPresent());
     }
 

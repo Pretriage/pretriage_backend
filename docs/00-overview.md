@@ -34,7 +34,7 @@ The current focus is first attention only. The system does not model referral, d
 - Spring Data JPA
 - PostgreSQL through Docker Compose
 - Spring Security OAuth2 Resource Server
-- Gemini REST structured output (`gemini-3.5-flash-lite`, configurable)
+- Gemini REST structured output (`gemini-3.8-flash`, configurable)
 - Spring WebSocket + Gemini Live (`gemini-3.8-live`) for the optional voice chat
 
 The [voice interaction guide](14-chat-voz-gemini-live.md) explains the mobile,

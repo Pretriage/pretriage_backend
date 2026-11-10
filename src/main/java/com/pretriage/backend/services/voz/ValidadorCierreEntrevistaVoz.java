@@ -31,23 +31,34 @@ public final class ValidadorCierreEntrevistaVoz {
 
     private ValidadorCierreEntrevistaVoz() { }
 
+    enum MotivoRechazo { RESUMEN_INVALIDO, PREGUNTA_PENDIENTE }
+
+    record RechazoCierre(MotivoRechazo motivo, String instruccion) { }
+
     /** Empty means closure may proceed; otherwise return a safe corrective tool response. */
     public static Optional<String> validar(List<TurnoVoz> historial, ResumenEntrevistaVoz resumen) {
-        return validarConProgreso(ProgresoEntrevista.evaluar(historial), resumen);
+        return validarConProgreso(ProgresoEntrevista.evaluar(historial), resumen).map(RechazoCierre::instruccion);
     }
 
     /** Validates closure against a context snapshot while preserving turns excluded from clinical evidence. */
     public static Optional<String> validarConContexto(List<ProgresoEntrevista.Turno> historial,
                                                        ResumenEntrevistaVoz resumen) {
+        return validarAccionConContexto(historial, resumen).map(RechazoCierre::instruccion);
+    }
+
+    static Optional<RechazoCierre> validarAccionConContexto(List<ProgresoEntrevista.Turno> historial,
+                                                           ResumenEntrevistaVoz resumen) {
         return validarConProgreso(ProgresoEntrevista.evaluarConContexto(historial), resumen);
     }
 
-    private static Optional<String> validarConProgreso(ProgresoEntrevista progreso, ResumenEntrevistaVoz resumen) {
+    private static Optional<RechazoCierre> validarConProgreso(ProgresoEntrevista progreso, ResumenEntrevistaVoz resumen) {
         if (!estructuraValida(resumen)) {
-            return Optional.of("Corrige el resumen: incluye todos los campos de texto y listas requeridos, "
-                    + "sin textos vacios; usa no informado o listas vacias para datos ausentes y dolor entre 0 y 10 o null. No inventes datos.");
+            return Optional.of(new RechazoCierre(MotivoRechazo.RESUMEN_INVALIDO,
+                    "Corrige el resumen: incluye todos los campos de texto y listas requeridos, "
+                    + "sin textos vacios; usa no informado o listas vacias para datos ausentes y dolor entre 0 y 10 o null. No inventes datos."));
         }
-        return progreso.puedeCerrar() ? Optional.empty() : Optional.of(progreso.instruccionSiguientePaso());
+        return progreso.puedeCerrar() ? Optional.empty()
+                : Optional.of(new RechazoCierre(MotivoRechazo.PREGUNTA_PENDIENTE, progreso.instruccionSiguientePaso()));
     }
 
     /** Text and voice use the same patient evidence, including answers to preceding questions. */

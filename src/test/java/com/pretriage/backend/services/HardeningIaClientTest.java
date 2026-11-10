@@ -296,7 +296,7 @@ class HardeningIaClientTest {
     void fueraDeContextoNoPuedeDevolverUnaClasificacionNiEvidencia() {
         when(gemini.generar(anyString(), anyString(), any(), any()))
                 .thenReturn("""
-                        {"finalizado":false,"mensaje":"Contame qué te pasa para poder orientarte con la entrevista.",
+                        {"finalizado":false,"mensaje":"No se pudo completar la entrevista de salud.",
                          "estadoEntrada":"FUERA_DE_CONTEXTO","resultado":null,"evidenciaClinica":[]}
                         """);
 
@@ -305,7 +305,26 @@ class HardeningIaClientTest {
         assertFalse(result.finalizado());
         assertNull(result.resultado());
         assertEquals(EstadoEntradaChat.FUERA_DE_CONTEXTO, result.estadoEntrada());
-        verify(gemini, times(1)).generar(anyString(), anyString(), any(), any());
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        verify(gemini, times(1)).generar(prompt.capture(), anyString(), any(), any());
+        assertTrue(prompt.getValue().contains("estadoEntrada=RELEVANTE, finalizado=true"));
+        assertTrue(prompt.getValue().contains("finalizado=false, resultado=null y evidenciaClinica=[]"));
+        assertTrue(prompt.getValue().contains("requiereAtencionInmediata=true y nivelPrioridad=4 o 5"));
+        assertFalse(prompt.getValue().contains("objetivoDelTurno"));
+    }
+
+    @Test
+    void rechazaMezclarElEstadoDeAlcanceConLaRamaDeCierreOpuesta() {
+        String sinHechos = """
+                {"estadoEntrada":"AMBIGUO","finalizado":false,"mensaje":"Entrevista incompleta.",
+                 "resultado":null,"evidenciaClinica":[]}
+                """;
+        when(gemini.generar(anyString(), anyString(), any(), any()))
+                .thenReturn(sinHechos.replace("\"finalizado\":false", "\"finalizado\":true"),
+                        sinHechos.replace("\"AMBIGUO\"", "\"RELEVANTE\""));
+
+        assertThrows(ProveedorIaException.class, () -> client.consultar("reglas", input("No sé qué decir."), true));
+        assertThrows(ProveedorIaException.class, () -> client.consultar("reglas", input("Tengo fiebre."), true));
     }
 
     @Test

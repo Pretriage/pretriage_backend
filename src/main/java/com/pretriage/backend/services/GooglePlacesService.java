@@ -498,8 +498,10 @@ public class GooglePlacesService {
 
                                     combinacionRutasDTO.setTipoTransporte(
                                             this.pasarAEspaniolTransporte(step.getTravelMode()));
-                                    combinacionRutasDTO
-                                            .setIndicaciones(step.getNavigationInstruction().getInstructions());
+                                    combinacionRutasDTO.setIndicaciones(Optional
+                                            .ofNullable(step.getNavigationInstruction())
+                                            .map(NavigationInstructionDTO::getInstructions)
+                                            .orElse(""));
                                     combinaciones.add(combinacionRutasDTO);
                                 }));
 
