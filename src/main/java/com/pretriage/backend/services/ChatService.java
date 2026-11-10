@@ -56,7 +56,9 @@ import java.util.regex.Pattern;
 @Service
 public class ChatService {
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
-    private static final String MENSAJE_INICIAL = "Hola. Voy a hacerte algunas preguntas breves para registrar tus sintomas. No reemplazo una evaluacion medica. Cual es el principal motivo de tu consulta hoy?";
+    private static final String MENSAJE_INICIAL = "¡Hola! Soy el asistente de PreTriage. Te voy a hacer algunas preguntas breves para registrar tus síntomas y "
+            + "ayudar a organizar tu atención. No reemplazo una evaluación médica: si sentís que es una emergencia, "
+            + "llamá al 107 o acercate a la guardia más cercana. Para empezar, ¿cuál es el principal motivo de tu consulta hoy?";
     private static final String ALCANCE_CONTRADICTORIO = "scope_conflicts_with_patient_evidence";
     public static final int MAX_MENSAJES_PACIENTE = LenguajeClinicoChat.MAX_RESPUESTAS_PACIENTE;
 
