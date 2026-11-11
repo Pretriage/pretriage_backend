@@ -66,6 +66,12 @@ public class AtencionHospitalService {
             EstadoConsulta.ATRASADO,
             EstadoConsulta.EN_ATENCION);
 
+    /**
+     * Cantidad de hospitales (los disponibles más cercanos) para los que se calcula el
+     * tiempo de traslado con Google Routes al listar. Cada uno es una consulta paga y con cuota.
+     */
+    static final int MAX_HOSPITALES_CON_RUTA = 5;
+
     private static final String ORDEN_DISTANCIA = "distancia";
     private static final String ORDEN_TIEMPO_ATENCION = "tiempo-atencion";
     private static final String ORDEN_VALORACION = "valoracion";
@@ -131,25 +137,13 @@ public class AtencionHospitalService {
                 .filter(hospital -> hospital.getPlaceId() != null && !hospital.getPlaceId().isBlank())
                 .collect(Collectors.toMap(Hospital::getPlaceId, Function.identity()));
 
-        // Los tiempos de traslado se calculan con Google en paralelo, uno por hospital.
-        Map<String, CompletableFuture<LocalTime>> tiemposArribo = new HashMap<>();
-        for (HospitalCercanoDTO hospitalCercano : hospitalesCercanos) {
-            Hospital hospital = hospitalesPorPlaceId.get(hospitalCercano.getPlaceId());
-            if (hospital == null) continue;
-            tiemposArribo.computeIfAbsent(hospitalCercano.getPlaceId(), placeId -> CompletableFuture
-                    .supplyAsync(() -> googlePlacesService.calcularTiempoEstimadoArriboMejorRuta(
-                            hospital, transporteEfectivo, latitud, longitud), GooglePlacesService.EJECUTOR_GOOGLE)
-                    .exceptionally(error -> null));
-        }
-
+        // Primero se resuelve todo lo que sale de la base (espera, disponibilidad) y se descartan
+        // los hospitales sin médicos activos, así no se gastan consultas a Google en ellos.
         List<HospitalCercanoDTO> resultado = hospitalesCercanos.stream()
                 .filter(hospitalCercano -> hospitalesPorPlaceId.containsKey(hospitalCercano.getPlaceId()))
                 .map(hospitalCercano -> {
                     Hospital hospital = hospitalesPorPlaceId.get(hospitalCercano.getPlaceId());
                     hospitalCercano.setIdHospital(hospital.getId());
-
-                    hospitalCercano.setTiempoEstimadoArriboMejorRuta(
-                            tiemposArribo.get(hospitalCercano.getPlaceId()).join());
 
                     EsperaNuevaConsultaCalculo espera = estimacionAtencionService.calcularEsperaParaNuevaConsulta(
                             hospital.getId(), especialidad.getId());
@@ -162,6 +156,21 @@ public class AtencionHospitalService {
                 })
                 .filter(HospitalCercanoDTO::isDisponible)
                 .toList();
+
+        // El tiempo de traslado (Google Routes) solo se calcula para los hospitales disponibles
+        // más cercanos, en paralelo. El resto queda sin tiempo de arribo.
+        Map<String, CompletableFuture<LocalTime>> tiemposArribo = new HashMap<>();
+        for (HospitalCercanoDTO hospitalCercano : resultado.subList(0, Math.min(MAX_HOSPITALES_CON_RUTA, resultado.size()))) {
+            Hospital hospital = hospitalesPorPlaceId.get(hospitalCercano.getPlaceId());
+            tiemposArribo.computeIfAbsent(hospitalCercano.getPlaceId(), placeId -> CompletableFuture
+                    .supplyAsync(() -> googlePlacesService.calcularTiempoEstimadoArriboMejorRuta(
+                            hospital, transporteEfectivo, latitud, longitud), GooglePlacesService.EJECUTOR_GOOGLE)
+                    .exceptionally(error -> null));
+        }
+        resultado.forEach(hospitalCercano -> {
+            CompletableFuture<LocalTime> tiempo = tiemposArribo.get(hospitalCercano.getPlaceId());
+            hospitalCercano.setTiempoEstimadoArriboMejorRuta(tiempo == null ? null : tiempo.join());
+        });
 
         boolean porTiempo = criterios.contains(ORDEN_TIEMPO_ATENCION);
         boolean porValoracion = criterios.contains(ORDEN_VALORACION);

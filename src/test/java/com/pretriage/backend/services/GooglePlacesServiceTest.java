@@ -33,6 +33,9 @@ import static org.mockito.Mockito.when;
         "google.api.key=test-api-key",
         "google.places.base-url=http://localhost:8089/v1/places",
         "google.routes.base-url=http://localhost:8089/directions/v2:computeRoutes",
+        // cada test stubbea respuestas distintas para el mismo hospital: sin cache entre tests
+        "google.cache.rutas-segundos=0",
+        "google.cache.detalles-segundos=0",
         // auth0 no se usan en este test
         "auth0.client-id.machine-to-machine=AUTH0_M2M_CLIENT_ID",
         "auth0.client-secret.machine-to-machine=AUTH0_M2M_CLIENT_SECRET",
