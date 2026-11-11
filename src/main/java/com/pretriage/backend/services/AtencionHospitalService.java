@@ -34,6 +34,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -43,6 +44,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -129,6 +131,17 @@ public class AtencionHospitalService {
                 .filter(hospital -> hospital.getPlaceId() != null && !hospital.getPlaceId().isBlank())
                 .collect(Collectors.toMap(Hospital::getPlaceId, Function.identity()));
 
+        // Los tiempos de traslado se calculan con Google en paralelo, uno por hospital.
+        Map<String, CompletableFuture<LocalTime>> tiemposArribo = new HashMap<>();
+        for (HospitalCercanoDTO hospitalCercano : hospitalesCercanos) {
+            Hospital hospital = hospitalesPorPlaceId.get(hospitalCercano.getPlaceId());
+            if (hospital == null) continue;
+            tiemposArribo.computeIfAbsent(hospitalCercano.getPlaceId(), placeId -> CompletableFuture
+                    .supplyAsync(() -> googlePlacesService.calcularTiempoEstimadoArriboMejorRuta(
+                            hospital, transporteEfectivo, latitud, longitud), GooglePlacesService.EJECUTOR_GOOGLE)
+                    .exceptionally(error -> null));
+        }
+
         List<HospitalCercanoDTO> resultado = hospitalesCercanos.stream()
                 .filter(hospitalCercano -> hospitalesPorPlaceId.containsKey(hospitalCercano.getPlaceId()))
                 .map(hospitalCercano -> {
@@ -136,8 +149,7 @@ public class AtencionHospitalService {
                     hospitalCercano.setIdHospital(hospital.getId());
 
                     hospitalCercano.setTiempoEstimadoArriboMejorRuta(
-                            googlePlacesService.calcularTiempoEstimadoArriboMejorRuta(
-                                    hospital, transporteEfectivo, latitud, longitud));
+                            tiemposArribo.get(hospitalCercano.getPlaceId()).join());
 
                     EsperaNuevaConsultaCalculo espera = estimacionAtencionService.calcularEsperaParaNuevaConsulta(
                             hospital.getId(), especialidad.getId());

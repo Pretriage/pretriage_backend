@@ -12,12 +12,18 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.time.LocalTime;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 @Service
@@ -26,7 +32,17 @@ import java.util.stream.Collectors;
 public class GooglePlacesService {
 
     private final DireccionService direccionService;
-    private final RestClient restClient = RestClient.create();
+    /**
+     * Limites de espera para Google: sin ellos, una respuesta lenta de Google
+     * bloquea la solicitud del paciente indefinidamente.
+     */
+    static final Duration TIMEOUT_CONEXION_GOOGLE = Duration.ofSeconds(3);
+    static final Duration TIMEOUT_LECTURA_GOOGLE = Duration.ofSeconds(8);
+
+    /** Ejecuta en paralelo las consultas independientes a Google (una por hospital). */
+    static final ExecutorService EJECUTOR_GOOGLE = Executors.newVirtualThreadPerTaskExecutor();
+
+    private final RestClient restClient = crearClienteGoogle();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     // Base URL de la Places API (New)
@@ -87,19 +103,44 @@ public class GooglePlacesService {
     @Value("${google.api.key}")
     private String apiKey;
 
+    private static RestClient crearClienteGoogle() {
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(TIMEOUT_CONEXION_GOOGLE)
+                .build();
+        JdkClientHttpRequestFactory fabrica = new JdkClientHttpRequestFactory(httpClient);
+        fabrica.setReadTimeout(TIMEOUT_LECTURA_GOOGLE);
+        return RestClient.builder().requestFactory(fabrica).build();
+    }
+
     /** Registered hospitals are the candidate set; Google never discovers candidates for this flow. */
     public List<HospitalCercanoDTO> buscarHospitalesRegistrados(Double latitud, Double longitud,
                                                                List<Hospital> registrados) {
         if (!coordenadasValidas(latitud, longitud)) throw new IllegalArgumentException("Coordenadas invalidas");
-        List<HospitalUbicado> cercanos = new ArrayList<>();
+        List<Hospital> candidatos = new ArrayList<>();
         for (Hospital hospital : registrados) {
             if (hospital.getPlaceId() == null || hospital.getPlaceId().isBlank()) continue;
             Coordenada coordenada = hospital.getDireccion() == null ? null : hospital.getDireccion().getCoordenada();
             Double lat = coordenada == null ? null : coordenada.getLatitud();
             Double lon = coordenada == null ? null : coordenada.getLongitud();
             if (coordenadasValidas(lat, lon) && distanciaMetros(latitud, longitud, lat, lon) > RADIO_BUSQUEDA_METROS) continue;
+            candidatos.add(hospital);
+        }
 
-            GooglePlaceDTO detalle = obtenerDetalleCercano(hospital.getPlaceId());
+        // Los detalles de cada hospital se piden a Google en paralelo en lugar de uno por uno.
+        Map<String, CompletableFuture<GooglePlaceDTO>> detalles = new HashMap<>();
+        for (Hospital hospital : candidatos) {
+            detalles.computeIfAbsent(hospital.getPlaceId(), placeId -> CompletableFuture
+                    .supplyAsync(() -> obtenerDetalleCercano(placeId), EJECUTOR_GOOGLE)
+                    .exceptionally(error -> null));
+        }
+
+        List<HospitalUbicado> cercanos = new ArrayList<>();
+        for (Hospital hospital : candidatos) {
+            Coordenada coordenada = hospital.getDireccion() == null ? null : hospital.getDireccion().getCoordenada();
+            Double lat = coordenada == null ? null : coordenada.getLatitud();
+            Double lon = coordenada == null ? null : coordenada.getLongitud();
+
+            GooglePlaceDTO detalle = detalles.get(hospital.getPlaceId()).join();
             if (detalle != null && detalle.getLocation() != null
                     && coordenadasValidas(detalle.getLocation().getLatitude(), detalle.getLocation().getLongitude())) {
                 lat = detalle.getLocation().getLatitude();
