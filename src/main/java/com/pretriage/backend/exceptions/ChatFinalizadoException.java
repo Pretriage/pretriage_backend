@@ -4,4 +4,8 @@ public class ChatFinalizadoException extends RuntimeException {
     public ChatFinalizadoException() {
         super("La sesión de triage ya finalizó");
     }
+
+    public ChatFinalizadoException(String mensaje) {
+        super(mensaje);
+    }
 }

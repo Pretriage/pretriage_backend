@@ -64,7 +64,8 @@ public class ChatVozHandshakeInterceptor implements HandshakeInterceptor {
             return false;
         }
         if (chat.finalizado() || chat.estadoTurnoTexto() == EstadoTurnoTexto.PENDIENTE
-                || chat.estadoTurnoTexto() == EstadoTurnoTexto.NO_DISPONIBLE) {
+                || chat.estadoTurnoTexto() == EstadoTurnoTexto.NO_DISPONIBLE
+                || chatService.atencionIniciada(idChat, idPaciente)) {
             response.setStatusCode(HttpStatus.CONFLICT);
             return false;
         }

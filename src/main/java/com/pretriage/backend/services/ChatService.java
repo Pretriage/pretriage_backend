@@ -245,6 +245,7 @@ public class ChatService {
         Chat chat = buscarChatPropio(idChat, idPaciente);
         validarTurnoTextoNoBloqueado(chat);
         if (chat.isFinalizado()) throw new ChatFinalizadoException();
+        validarAtencionNoIniciada(chat);
         Mensaje mensajePaciente = new Mensaje(contenido.trim(), AutorMensaje.PACIENTE, chat.getPaciente());
         chat.agregarMensaje(mensajePaciente);
         return procesarTurnoTexto(chat, idPaciente, mensajePaciente, false);
@@ -577,6 +578,29 @@ public class ChatService {
         return repoConsultasMedicas.findFirstByPacienteIdAndEstadoConsultaIn(paciente.getId(),
                 EnumSet.complementOf(EnumSet.of(EstadoConsulta.PENDIENTE,
                         EstadoConsulta.CANCELADA, EstadoConsulta.FINALIZADA)));
+    }
+
+    static final String MENSAJE_ATENCION_INICIADA =
+            "Tu atención con el médico ya comenzó, por eso el chat ya no está disponible.";
+
+    /** Una vez que el médico inicia la atención, el paciente ya no puede seguir usando el chat. */
+    public void validarAtencionNoIniciada(Chat chat) {
+        Optional<ConsultaMedica> consulta = chat.getConsultaOrigenId() != null
+                ? repoConsultasMedicas.findById(chat.getConsultaOrigenId())
+                : chat.getPaciente() == null ? Optional.empty() : consultaActual(chat.getPaciente());
+        if (consulta.map(c -> c.getEstadoConsulta() == EstadoConsulta.EN_ATENCION).orElse(false)) {
+            throw new ChatFinalizadoException(MENSAJE_ATENCION_INICIADA);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public boolean atencionIniciada(String idChat, String idPaciente) {
+        try {
+            validarAtencionNoIniciada(buscarChatPropio(idChat, idPaciente));
+            return false;
+        } catch (ChatFinalizadoException atencionEnCurso) {
+            return true;
+        }
     }
 
     private void validarConsultaVigente(Chat chat, String idPaciente) {
