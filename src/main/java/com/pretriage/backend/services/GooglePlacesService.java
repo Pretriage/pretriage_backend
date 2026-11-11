@@ -12,12 +12,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
-import java.net.http.HttpClient;
 import java.time.Duration;
 import java.time.LocalTime;
 import java.util.*;
@@ -103,11 +102,13 @@ public class GooglePlacesService {
     @Value("${google.api.key}")
     private String apiKey;
 
+    /**
+     * Usa el cliente HTTP/1.1 clasico: el cliente de Java intenta pasar cada POST
+     * a HTTP/2 (h2c) y eso rompe las respuestas de servidores que no lo soportan.
+     */
     private static RestClient crearClienteGoogle() {
-        HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(TIMEOUT_CONEXION_GOOGLE)
-                .build();
-        JdkClientHttpRequestFactory fabrica = new JdkClientHttpRequestFactory(httpClient);
+        SimpleClientHttpRequestFactory fabrica = new SimpleClientHttpRequestFactory();
+        fabrica.setConnectTimeout(TIMEOUT_CONEXION_GOOGLE);
         fabrica.setReadTimeout(TIMEOUT_LECTURA_GOOGLE);
         return RestClient.builder().requestFactory(fabrica).build();
     }
