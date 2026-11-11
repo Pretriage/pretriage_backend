@@ -471,6 +471,39 @@ public class AtencionHospitalServiceTest {
         }
 
         @Test
+        void soloSeCalculaLaRutaParaLosHospitalesDisponiblesMasCercanos() {
+                String auth0idPaciente = "auth0|Paciente";
+                String codigoEspecialidad = "PEDIATRIA";
+                EspecialidadMedica especialidad = crearEspecialidad(30L, codigoEspecialidad);
+                List<Hospital> registrados = new java.util.ArrayList<>();
+                List<HospitalCercanoDTO> cercanos = new java.util.ArrayList<>();
+                for (int i = 1; i <= 7; i++) {
+                        registrados.add(crearHospital((long) i, "hospital" + i, especialidad));
+                        cercanos.add(crearHospitalCercano("hospital" + i));
+                }
+
+                when(repoEspecialidadesMedicas.findByCodigo(codigoEspecialidad)).thenReturn(Optional.of(especialidad));
+                when(repoHospitales.findDistinctByEspecialidadesCodigo(codigoEspecialidad)).thenReturn(registrados);
+                when(googlePlacesService.buscarHospitalesRegistrados(eq(-34.6), eq(-58.4), anyList())).thenReturn(cercanos);
+                when(pacienteService.obtenerPacienteConUsuarioAuthId(auth0idPaciente))
+                                .thenReturn(Optional.of(new Paciente()));
+                when(estimacionAtencionService.calcularEsperaParaNuevaConsulta(anyLong(), anyLong()))
+                                .thenReturn(new EsperaNuevaConsultaCalculo(0, 0, LocalDateTime.now(), true));
+                when(googlePlacesService.calcularTiempoEstimadoArriboMejorRuta(any(), eq("transporte-publico"),
+                                eq(-34.6), eq(-58.4))).thenReturn(LocalTime.of(0, 10, 0));
+
+                List<HospitalCercanoDTO> hospitales = service.buscarHospitalesCercanos(-34.6, -58.4, codigoEspecialidad,
+                                null, auth0idPaciente);
+
+                assertEquals(7, hospitales.size());
+                verify(googlePlacesService, times(AtencionHospitalService.MAX_HOSPITALES_CON_RUTA))
+                                .calcularTiempoEstimadoArriboMejorRuta(any(), any(), any(), any());
+                assertEquals(LocalTime.of(0, 10, 0), hospitales.get(4).getTiempoEstimadoArriboMejorRuta());
+                assertNull(hospitales.get(5).getTiempoEstimadoArriboMejorRuta());
+                assertNull(hospitales.get(6).getTiempoEstimadoArriboMejorRuta());
+        }
+
+        @Test
         void noSePuedeSeleccionarUnHospitalQueNoExiste() {
                 String auth0Id = "auth0|123";
                 String placeId = "place_inexistente";
@@ -747,9 +780,6 @@ public class AtencionHospitalServiceTest {
                                 .thenReturn(List.of(hospital1));
                 when(pacienteService.obtenerPacienteConUsuarioAuthId(auth0idPaciente))
                                 .thenReturn(Optional.of(new Paciente()));
-                when(googlePlacesService.calcularTiempoEstimadoArriboMejorRuta(any(), anyString(), anyDouble(),
-                                anyDouble()))
-                                .thenReturn(LocalTime.of(0, 10, 0));
                 when(estimacionAtencionService.calcularEsperaParaNuevaConsulta(20L, 30L))
                                 .thenReturn(new EsperaNuevaConsultaCalculo(5, 50, LocalDateTime.now().plusMinutes(50),
                                                 false));
@@ -758,6 +788,8 @@ public class AtencionHospitalServiceTest {
                                 "caminar", auth0idPaciente);
 
                 assertTrue(hospitales.isEmpty());
+                // sin hospitales disponibles no se gasta ninguna consulta de rutas en Google
+                verify(googlePlacesService, never()).calcularTiempoEstimadoArriboMejorRuta(any(), any(), any(), any());
         }
 
         @Test

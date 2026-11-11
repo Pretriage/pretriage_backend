@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.util.ArrayList;
@@ -1335,11 +1336,25 @@ public class SesionVozChat implements GeminiLiveOyente {
 
         setup.putObject("systemInstruction").putArray("parts").addObject().put("text", SYSTEM_INSTRUCTION);
         setup.putArray("tools").addObject().putArray("functionDeclarations").add(declararFuncionFinalizar());
-        setup.putObject("inputAudioTranscription");
+        ObjectNode transcripcionEntrada = setup.putObject("inputAudioTranscription");
+        // Los modelos de audio nativo eligen el idioma solos; a la transcripcion si se le indica.
+        if (properties.idioma() != null && !properties.idioma().isBlank()) {
+            transcripcionEntrada.putArray("languageCodes").add(properties.idioma());
+        }
+        if (!properties.vocabulario().isEmpty()) {
+            ArrayNode vocabulario = transcripcionEntrada.putArray("customVocabulary");
+            properties.vocabulario().forEach(vocabulario::add);
+        }
         setup.putObject("outputAudioTranscription");
         ObjectNode entradaTiempoReal = setup.putObject("realtimeInputConfig");
-        entradaTiempoReal.putObject("automaticActivityDetection").put("disabled", false);
-        entradaTiempoReal.put("activityHandling", "START_OF_ACTIVITY_INTERRUPTS");
+        // Deteccion de voz menos sensible al ruido de fondo de una guardia (ver GeminiLiveProperties).
+        entradaTiempoReal.putObject("automaticActivityDetection")
+                .put("disabled", false)
+                .put("startOfSpeechSensitivity", properties.sensibilidadInicioVoz())
+                .put("endOfSpeechSensitivity", properties.sensibilidadFinVoz())
+                .put("prefixPaddingMs", properties.margenPrevioMs())
+                .put("silenceDurationMs", properties.silencioFinTurnoMs());
+        entradaTiempoReal.put("activityHandling", properties.manejoActividad());
         return mensaje.toString();
     }
 

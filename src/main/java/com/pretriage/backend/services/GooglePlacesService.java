@@ -14,13 +14,16 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalTime;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
@@ -40,6 +43,37 @@ public class GooglePlacesService {
 
     /** Ejecuta en paralelo las consultas independientes a Google (una por hospital). */
     static final ExecutorService EJECUTOR_GOOGLE = Executors.newVirtualThreadPerTaskExecutor();
+
+    /** Google rechaza con 429 cuando se agota la cuota de Routes API del proyecto. */
+    static final String MENSAJE_LIMITE_RUTAS_GOOGLE =
+            "Por ahora no podemos calcular la ruta: Google alcanzó el límite de consultas. "
+                    + "Podés abrirla directamente en Google Maps.";
+
+    /**
+     * Cuando Google responde 429 (cuota agotada) se deja de consultar esa API durante este
+     * tiempo: cada intento fallido igual tarda y solo suma rechazos.
+     */
+    static final Duration PAUSA_POR_LIMITE_GOOGLE = Duration.ofMinutes(10);
+
+    private static final int MAX_ENTRADAS_CACHE = 2000;
+
+    /** Segundos que se reutiliza una ruta calculada para el mismo hospital, transporte y origen (~100 m). */
+    @Value("${google.cache.rutas-segundos:300}")
+    private long segundosCacheRutas;
+
+    /** Segundos que se reutilizan los detalles de un lugar (ubicación, valoración): cambian muy poco. */
+    @Value("${google.cache.detalles-segundos:43200}")
+    private long segundosCacheDetalles;
+
+    private final Map<String, EntradaCache<GooglePlaceDTO>> cacheDetalles = new ConcurrentHashMap<>();
+    private final Map<String, EntradaCache<LocalTime>> cacheMejorRuta = new ConcurrentHashMap<>();
+    private final Map<String, EntradaCache<List<TiempoEstimadoArriboHospitalResponse>>> cacheRutas =
+            new ConcurrentHashMap<>();
+
+    private volatile Instant rutasPausadasHasta = Instant.MIN;
+    private volatile Instant detallesPausadosHasta = Instant.MIN;
+
+    private record EntradaCache<T>(T valor, Instant venceEn) { }
 
     private final RestClient restClient = crearClienteGoogle();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -164,12 +198,22 @@ public class GooglePlacesService {
     }
 
     private GooglePlaceDTO obtenerDetalleCercano(String placeId) {
+        GooglePlaceDTO cacheado = leerCache(cacheDetalles, placeId);
+        if (cacheado != null) return cacheado;
+        if (enPausa(detallesPausadosHasta)) return null;
         try {
             String json = restClient.get().uri(PLACES_BASE_URL + "/{id}", placeId)
                     .header("X-Goog-Api-Key", apiKey)
                     .header("X-Goog-FieldMask", "id,displayName,formattedAddress,location,rating,userRatingCount")
                     .retrieve().body(String.class);
-            return objectMapper.readValue(json, GooglePlaceDTO.class);
+            GooglePlaceDTO detalle = objectMapper.readValue(json, GooglePlaceDTO.class);
+            guardarCache(cacheDetalles, placeId, detalle, segundosCacheDetalles);
+            return detalle;
+        } catch (HttpClientErrorException.TooManyRequests error) {
+            detallesPausadosHasta = Instant.now().plus(PAUSA_POR_LIMITE_GOOGLE);
+            log.warn("Google Places limitó Place Details (429, cuota agotada); se pausan esas consultas {} min: {}",
+                    PAUSA_POR_LIMITE_GOOGLE.toMinutes(), error.getMessage());
+            return null;
         } catch (Exception error) {
             log.warn("No se pudieron completar detalles del hospital registrado placeId={} reason={}",
                     placeId, error.getClass().getSimpleName());
@@ -321,6 +365,10 @@ public class GooglePlacesService {
     @Transactional
     public List<TiempoEstimadoArriboHospitalResponse> calcularTiempoArriboHospital(
             Hospital hospital, String transporte, Double latitud, Double longitud) {
+        String clave = claveRuta(hospital, transporte, latitud, longitud);
+        List<TiempoEstimadoArriboHospitalResponse> cacheadas = leerCache(cacheRutas, clave);
+        if (cacheadas != null) return cacheadas;
+        if (enPausa(rutasPausadasHasta)) throw new IllegalArgumentException(MENSAJE_LIMITE_RUTAS_GOOGLE);
         try {
             GooglePlacesComputeRouteResponseDTO response =
                     consultarRutasComputeRoutes(hospital, transporte, latitud, longitud);
@@ -330,8 +378,14 @@ public class GooglePlacesService {
                 throw new IllegalArgumentException("La API de Google no devolvió resultados, intente más tarde");
             }
 
-            return this.mappearATiempoEstimadoArriboHospitalResponse(response, transporte, hospital.getId());
+            List<TiempoEstimadoArriboHospitalResponse> rutas = List.copyOf(
+                    this.mappearATiempoEstimadoArriboHospitalResponse(response, transporte, hospital.getId()));
+            guardarCache(cacheRutas, clave, rutas, segundosCacheRutas);
+            return rutas;
 
+        } catch (HttpClientErrorException.TooManyRequests e) {
+            pausarRutas(e);
+            throw new IllegalArgumentException(MENSAJE_LIMITE_RUTAS_GOOGLE);
         } catch (Exception e) {
             log.error("Error al buscar hospitales cercanos en Google Places API: {}", e.getMessage(), e);
             throw new IllegalArgumentException("Error en la API de Google, intente más tarde ");
@@ -350,6 +404,10 @@ public class GooglePlacesService {
      */
     public LocalTime calcularTiempoEstimadoArriboMejorRuta(
             Hospital hospital, String transporte, Double latitud, Double longitud) {
+        String clave = claveRuta(hospital, transporte, latitud, longitud);
+        LocalTime cacheado = leerCache(cacheMejorRuta, clave);
+        if (cacheado != null) return cacheado;
+        if (enPausa(rutasPausadasHasta)) return null;
         try {
             GooglePlacesComputeRouteResponseDTO response =
                     consultarRutasComputeRoutes(hospital, transporte, latitud, longitud);
@@ -359,12 +417,58 @@ public class GooglePlacesService {
                 return null;
             }
 
-            return this.convertDurationToTime(rutaPreferida.getDuration());
+            LocalTime tiempo = this.convertDurationToTime(rutaPreferida.getDuration());
+            guardarCache(cacheMejorRuta, clave, tiempo, segundosCacheRutas);
+            return tiempo;
+        } catch (HttpClientErrorException.TooManyRequests e) {
+            pausarRutas(e);
+            return null;
         } catch (Exception e) {
             log.warn("No se pudo calcular la mejor ruta de arribo para el hospital {}: {}", hospital.getId(),
                     e.getMessage());
             return null;
         }
+    }
+
+    private void pausarRutas(HttpClientErrorException.TooManyRequests error) {
+        rutasPausadasHasta = Instant.now().plus(PAUSA_POR_LIMITE_GOOGLE);
+        log.warn("Google Routes limitó Compute Routes (429, cuota agotada); se pausan esas consultas {} min: {}",
+                PAUSA_POR_LIMITE_GOOGLE.toMinutes(), error.getMessage());
+    }
+
+    private static boolean enPausa(Instant pausadoHasta) {
+        return Instant.now().isBefore(pausadoHasta);
+    }
+
+    /** Mismo hospital, transporte y origen redondeado a ~100 m comparten la ruta calculada. */
+    private static String claveRuta(Hospital hospital, String transporte, Double latitud, Double longitud) {
+        return hospital.getId() + "|" + hospital.getPlaceId() + "|"
+                + (transporte == null ? "" : transporte.toLowerCase()) + "|"
+                + redondear(latitud) + "|" + redondear(longitud);
+    }
+
+    private static String redondear(Double coordenada) {
+        return coordenada == null ? "" : String.format(Locale.ROOT, "%.3f", coordenada);
+    }
+
+    private static <T> T leerCache(Map<String, EntradaCache<T>> cache, String clave) {
+        EntradaCache<T> entrada = cache.get(clave);
+        if (entrada == null) return null;
+        if (Instant.now().isAfter(entrada.venceEn())) {
+            cache.remove(clave, entrada);
+            return null;
+        }
+        return entrada.valor();
+    }
+
+    private static <T> void guardarCache(Map<String, EntradaCache<T>> cache, String clave, T valor, long segundos) {
+        if (valor == null || segundos <= 0) return;
+        if (cache.size() >= MAX_ENTRADAS_CACHE) {
+            Instant ahora = Instant.now();
+            cache.entrySet().removeIf(entrada -> ahora.isAfter(entrada.getValue().venceEn()));
+            if (cache.size() >= MAX_ENTRADAS_CACHE) cache.clear();
+        }
+        cache.put(clave, new EntradaCache<>(valor, Instant.now().plusSeconds(segundos)));
     }
 
     /**
