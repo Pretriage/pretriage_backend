@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.ObjectMapper;
 
@@ -40,6 +41,11 @@ public class GooglePlacesService {
 
     /** Ejecuta en paralelo las consultas independientes a Google (una por hospital). */
     static final ExecutorService EJECUTOR_GOOGLE = Executors.newVirtualThreadPerTaskExecutor();
+
+    /** Google rechaza con 429 cuando se agota la cuota de Routes API del proyecto. */
+    static final String MENSAJE_LIMITE_RUTAS_GOOGLE =
+            "Por ahora no podemos calcular la ruta: Google alcanzó el límite de consultas. "
+                    + "Podés abrirla directamente en Google Maps.";
 
     private final RestClient restClient = crearClienteGoogle();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -332,6 +338,9 @@ public class GooglePlacesService {
 
             return this.mappearATiempoEstimadoArriboHospitalResponse(response, transporte, hospital.getId());
 
+        } catch (HttpClientErrorException.TooManyRequests e) {
+            log.warn("Google limitó las consultas de rutas (429): {}", e.getMessage());
+            throw new IllegalArgumentException(MENSAJE_LIMITE_RUTAS_GOOGLE);
         } catch (Exception e) {
             log.error("Error al buscar hospitales cercanos en Google Places API: {}", e.getMessage(), e);
             throw new IllegalArgumentException("Error en la API de Google, intente más tarde ");

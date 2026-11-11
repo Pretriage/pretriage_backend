@@ -9,7 +9,9 @@ import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
+import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 
 class GoogleRoutesMappingTest {
@@ -48,6 +50,30 @@ class GoogleRoutesMappingTest {
             assertEquals(2, ruta.getCombinacionesLineas().size());
             assertEquals("", ruta.getCombinacionesLineas().getFirst().getIndicaciones());
             assertEquals("Seguí derecho", ruta.getCombinacionesLineas().getLast().getIndicaciones());
+        } finally {
+            google.stop();
+        }
+    }
+
+    @Test
+    void avisaQueGoogleLimitoLasConsultasCuandoRespondeTooManyRequests() {
+        WireMockServer google = new WireMockServer(wireMockConfig().dynamicPort());
+        google.start();
+        try {
+            google.stubFor(post(urlEqualTo("/directions/v2:computeRoutes"))
+                    .willReturn(aResponse().withStatus(429).withBody("{\"error\":{\"code\":429}}")));
+
+            GooglePlacesService service = new GooglePlacesService(mock(DireccionService.class));
+            ReflectionTestUtils.setField(service, "apiKey", "clave-de-prueba");
+            ReflectionTestUtils.setField(service, "ROUTES_BASE_URL", google.baseUrl() + "/directions/v2:computeRoutes");
+            Hospital hospital = new Hospital();
+            hospital.setId(1L);
+            hospital.setPlaceId("hospital-de-prueba");
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> service.calcularTiempoArriboHospital(hospital, "transporte-publico", -34.6, -58.4));
+
+            assertEquals(GooglePlacesService.MENSAJE_LIMITE_RUTAS_GOOGLE, error.getMessage());
         } finally {
             google.stop();
         }
