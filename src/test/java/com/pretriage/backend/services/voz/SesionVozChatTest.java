@@ -118,7 +118,14 @@ class SesionVozChatTest {
         assertTrue(setup.has("outputAudioTranscription"));
         JsonNode entradaTiempoReal = setup.path("realtimeInputConfig");
         assertFalse(entradaTiempoReal.path("automaticActivityDetection").path("disabled").asBoolean(true));
-        assertEquals("START_OF_ACTIVITY_INTERRUPTS", entradaTiempoReal.path("activityHandling").asText());
+        // En una guardia ruidosa el ruido no debe interrumpir al asistente ni disparar turnos falsos.
+        assertEquals("NO_INTERRUPTION", entradaTiempoReal.path("activityHandling").asText());
+        JsonNode deteccion = entradaTiempoReal.path("automaticActivityDetection");
+        assertEquals("START_SENSITIVITY_LOW", deteccion.path("startOfSpeechSensitivity").asText());
+        assertEquals("END_SENSITIVITY_LOW", deteccion.path("endOfSpeechSensitivity").asText());
+        assertEquals(300, deteccion.path("prefixPaddingMs").asInt());
+        assertEquals(900, deteccion.path("silenceDurationMs").asInt());
+        assertTrue(setup.path("inputAudioTranscription").path("customVocabulary").size() > 0);
         assertTrue(setup.path("systemInstruction").path("parts").get(0).path("text").asText()
                 .contains(com.pretriage.backend.services.LenguajeClinicoChat.PREGUNTAS_SENCILLAS));
     }
