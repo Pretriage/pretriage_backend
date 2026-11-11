@@ -780,9 +780,6 @@ public class AtencionHospitalServiceTest {
                                 .thenReturn(List.of(hospital1));
                 when(pacienteService.obtenerPacienteConUsuarioAuthId(auth0idPaciente))
                                 .thenReturn(Optional.of(new Paciente()));
-                when(googlePlacesService.calcularTiempoEstimadoArriboMejorRuta(any(), anyString(), anyDouble(),
-                                anyDouble()))
-                                .thenReturn(LocalTime.of(0, 10, 0));
                 when(estimacionAtencionService.calcularEsperaParaNuevaConsulta(20L, 30L))
                                 .thenReturn(new EsperaNuevaConsultaCalculo(5, 50, LocalDateTime.now().plusMinutes(50),
                                                 false));
@@ -791,6 +788,8 @@ public class AtencionHospitalServiceTest {
                                 "caminar", auth0idPaciente);
 
                 assertTrue(hospitales.isEmpty());
+                // sin hospitales disponibles no se gasta ninguna consulta de rutas en Google
+                verify(googlePlacesService, never()).calcularTiempoEstimadoArriboMejorRuta(any(), any(), any(), any());
         }
 
         @Test
