@@ -22,6 +22,12 @@ public class EstadoConsultaPacienteDTO {
 
     private LocalDateTime fechaHoraLimiteRespuesta;
 
+    /** Veces que el paciente todavia puede pedir mas tiempo para llegar despues de no presentarse al llamado. */
+    private Integer extensionesRestantes;
+
+    /** Minutos que suma cada pedido de mas tiempo al final del plazo vigente. */
+    private Integer minutosPorExtension;
+
     private Long sectorId;
 
     private String nombreSector;

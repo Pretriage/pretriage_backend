@@ -7,6 +7,8 @@ import com.pretriage.backend.model.consultas.ConsultaMedica;
 import com.pretriage.backend.model.consultas.EntradaCola;
 import com.pretriage.backend.model.consultas.EstadoConsulta;
 import com.pretriage.backend.model.consultas.EstadoEntradaCola;
+import com.pretriage.backend.model.consultas.TipoPausaCola;
+import com.pretriage.backend.model.consultas.GestorDeCola;
 import com.pretriage.backend.model.hospitales.Sala;
 import com.pretriage.backend.model.hospitales.Sector;
 import com.pretriage.backend.model.personas.Medico;
@@ -412,5 +414,66 @@ class EsperaPacienteServiceTest {
     private void stubLocksForCancellation(ConsultaMedica consulta, EntradaCola entrada) {
         when(repoConsultasMedicas.findByIdForUpdate(consulta.getId())).thenReturn(Optional.of(consulta));
         when(repoEntradasCola.findByConsultaMedicaId(consulta.getId())).thenReturn(Optional.of(entrada));
+    }
+    private EntradaCola entradaAusente(Paciente paciente, LocalDateTime salida) {
+        ConsultaMedica consulta = new ConsultaMedica(); consulta.setId(5L); consulta.setPaciente(paciente);
+        consulta.setEstadoConsulta(EstadoConsulta.EN_ESPERA);
+        EntradaCola entrada = new EntradaCola(); entrada.setId(1L); entrada.setConsultaMedica(consulta);
+        entrada.setEstado(EstadoEntradaCola.EN_ESPERA);
+        entrada.setTipoPausa(TipoPausaCola.AUSENTE_AL_LLAMADO);
+        entrada.setFechaHoraSalidaTemporal(salida);
+        entrada.setFechaHoraLimiteRespuesta(salida.plusMinutes(60));
+        when(pacienteService.obtenerPacienteConUsuarioAuthId("auth")).thenReturn(Optional.of(paciente));
+        when(repoEntradasCola.findFirstByConsultaMedicaPacienteIdAndEstadoInOrderByIdDesc(eq(2L), any()))
+                .thenReturn(Optional.of(entrada));
+        when(repoEntradasCola.save(entrada)).thenReturn(entrada);
+        return entrada;
+    }
+
+    @Test
+    void pedirMasTiempoSumaAlFinalDelPlazoYNoDesdeAhora() {
+        Paciente paciente = new Paciente(); paciente.setId(2L);
+        LocalDateTime salida = LocalDateTime.now().minusMinutes(10);
+        EntradaCola entrada = entradaAusente(paciente, salida);
+        LocalDateTime plazoInicial = entrada.getFechaHoraLimiteRespuesta();
+
+        var dto = service.estoyAtrasado("auth");
+
+        assertEquals(EstadoEntradaCola.ATRASADO, entrada.getEstado());
+        assertEquals(plazoInicial.plusMinutes(EsperaPacienteService.MINUTOS_EXTENSION_ATRASO),
+                entrada.getFechaHoraLimiteRespuesta());
+        assertEquals(EsperaPacienteService.MAX_EXTENSIONES_ATRASO - 1, dto.getExtensionesRestantes());
+    }
+
+    @Test
+    void sigoEnCaminoSumaAlPlazoVigenteHastaElMaximoPermitido() {
+        Paciente paciente = new Paciente(); paciente.setId(2L);
+        LocalDateTime salida = LocalDateTime.now().minusMinutes(10);
+        EntradaCola entrada = entradaAusente(paciente, salida);
+        entrada.setEstado(EstadoEntradaCola.ATRASADO);
+        entrada.setTipoPausa(TipoPausaCola.ATRASADO_CONFIRMADO);
+        entrada.setFechaHoraLimiteRespuesta(salida.plusMinutes(60 + EsperaPacienteService.MINUTOS_EXTENSION_ATRASO));
+        LocalDateTime plazoVigente = entrada.getFechaHoraLimiteRespuesta();
+
+        var dto = service.sigoAsistiendo("auth");
+
+        assertEquals(plazoVigente.plusMinutes(EsperaPacienteService.MINUTOS_EXTENSION_ATRASO),
+                entrada.getFechaHoraLimiteRespuesta());
+        assertEquals(0, dto.getExtensionesRestantes());
+        assertThrows(IllegalStateException.class, () -> service.sigoAsistiendo("auth"));
+    }
+
+    @Test
+    void elPacienteAusenteAlLlamadoPuedeAvisarQueLlegoSinPedirMasTiempo() {
+        Paciente paciente = new Paciente(); paciente.setId(2L);
+        EntradaCola entrada = entradaAusente(paciente, LocalDateTime.now().minusMinutes(5));
+        entrada.setOrdenRelativo(10L);
+        GestorDeCola gestor = new GestorDeCola(); gestor.setId(3L); entrada.setGestorDeCola(gestor);
+
+        service.llegue("auth");
+
+        assertEquals(EstadoEntradaCola.EN_COLA, entrada.getEstado());
+        assertEquals(EstadoConsulta.EN_COLA, entrada.getConsultaMedica().getEstadoConsulta());
+        assertEquals(null, entrada.getFechaHoraLimiteRespuesta());
     }
 }

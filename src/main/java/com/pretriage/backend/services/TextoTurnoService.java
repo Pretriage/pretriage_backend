@@ -81,6 +81,7 @@ public class TextoTurnoService {
                 return MapperChat.toDTO(chat);
             }
             if (chat.isFinalizado()) throw new ChatFinalizadoException();
+            chatService.validarAtencionNoIniciada(chat);
             if (chat.getEstadoTurnoTexto() == EstadoTurnoTexto.PENDIENTE
                     || chat.getEstadoTurnoTexto() == EstadoTurnoTexto.NO_DISPONIBLE) throw conflicto("Ya hay un mensaje en proceso.");
             Mensaje mensaje = new Mensaje(texto, AutorMensaje.PACIENTE, chat.getPaciente());
