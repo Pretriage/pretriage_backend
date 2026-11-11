@@ -22,6 +22,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -34,8 +35,11 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class EsperaPacienteService {
 
-    private static final int MINUTOS_REPREGUNTA_ATRASADO = 30;
     private static final int MINUTOS_MAXIMOS_EN_ESPERA = 60;
+    /** Minutos que se suman al plazo vigente cada vez que el paciente pide más tiempo para llegar. */
+    static final int MINUTOS_EXTENSION_ATRASO = 30;
+    /** Cantidad máxima de veces que el paciente puede pedir más tiempo después de no presentarse al llamado. */
+    static final int MAX_EXTENSIONES_ATRASO = 2;
 
     private final PacienteService pacienteService;
     private final RepoEntradasCola repoEntradasCola;
@@ -66,34 +70,68 @@ public class EsperaPacienteService {
         return mapear(repoEntradasCola.save(entrada));
     }
 
+    /**
+     * El paciente no estaba cuando lo llamaron y avisa que va a demorar: se suman
+     * {@link #MINUTOS_EXTENSION_ATRASO} minutos al final del plazo vigente (no desde ahora).
+     */
     @Transactional
     public EstadoConsultaPacienteDTO estoyAtrasado(String auth0Id) {
         Paciente paciente = obtenerPaciente(auth0Id);
         EntradaCola entrada = obtenerEntradaActivaPaciente(paciente);
         validarEstado(entrada, EstadoEntradaCola.EN_ESPERA);
         if (entrada.getTipoPausa() != TipoPausaCola.AUSENTE_AL_LLAMADO) {
-            throw new IllegalStateException("Solo puede confirmar atraso si fue marcado ausente por el medico");
+            throw new IllegalStateException("Solo puede pedir más tiempo si no estaba cuando lo llamaron");
         }
 
+        extenderPlazo(entrada);
         entrada.setEstado(EstadoEntradaCola.ATRASADO);
         entrada.setTipoPausa(TipoPausaCola.ATRASADO_CONFIRMADO);
-        entrada.setFechaHoraUltimaRepregunta(LocalDateTime.now());
-        entrada.setFechaHoraLimiteRespuesta(LocalDateTime.now().plusMinutes(MINUTOS_REPREGUNTA_ATRASADO));
         entrada.getConsultaMedica().setEstadoConsulta(EstadoConsulta.ATRASADO);
 
         repoConsultasMedicas.save(entrada.getConsultaMedica());
         return mapear(repoEntradasCola.save(entrada));
     }
 
+    /** Vuelve a pedir más tiempo: se suma al final del plazo vigente, hasta {@link #MAX_EXTENSIONES_ATRASO} veces. */
     @Transactional
     public EstadoConsultaPacienteDTO sigoAsistiendo(String auth0Id) {
         Paciente paciente = obtenerPaciente(auth0Id);
         EntradaCola entrada = obtenerEntradaActivaPaciente(paciente);
         validarEstado(entrada, EstadoEntradaCola.ATRASADO);
 
-        entrada.setFechaHoraUltimaRepregunta(LocalDateTime.now());
-        entrada.setFechaHoraLimiteRespuesta(LocalDateTime.now().plusMinutes(MINUTOS_REPREGUNTA_ATRASADO));
+        extenderPlazo(entrada);
         return mapear(repoEntradasCola.save(entrada));
+    }
+
+    private void extenderPlazo(EntradaCola entrada) {
+        LocalDateTime ahora = LocalDateTime.now();
+        LocalDateTime plazoVigente = plazoVigente(entrada, ahora);
+        if (!plazoVigente.isAfter(ahora)) {
+            throw new IllegalStateException("El plazo para llegar ya venció");
+        }
+        if (extensionesUsadas(entrada) >= MAX_EXTENSIONES_ATRASO) {
+            throw new IllegalStateException("Ya pediste más tiempo " + MAX_EXTENSIONES_ATRASO
+                    + " veces. Si no llegás antes del horario indicado, tu turno se cancelará.");
+        }
+        entrada.setFechaHoraUltimaRepregunta(ahora);
+        entrada.setFechaHoraLimiteRespuesta(plazoVigente.plusMinutes(MINUTOS_EXTENSION_ATRASO));
+    }
+
+    private LocalDateTime plazoVigente(EntradaCola entrada, LocalDateTime ahora) {
+        if (entrada.getFechaHoraLimiteRespuesta() != null) return entrada.getFechaHoraLimiteRespuesta();
+        if (entrada.getFechaHoraSalidaTemporal() != null) {
+            return entrada.getFechaHoraSalidaTemporal().plusMinutes(MINUTOS_MAXIMOS_EN_ESPERA);
+        }
+        return ahora;
+    }
+
+    /** Las extensiones se deducen del plazo: cada una suma {@link #MINUTOS_EXTENSION_ATRASO} minutos al plazo inicial. */
+    private int extensionesUsadas(EntradaCola entrada) {
+        if (entrada.getFechaHoraSalidaTemporal() == null || entrada.getFechaHoraLimiteRespuesta() == null) return 0;
+        long minutosExtra = Duration.between(
+                entrada.getFechaHoraSalidaTemporal().plusMinutes(MINUTOS_MAXIMOS_EN_ESPERA),
+                entrada.getFechaHoraLimiteRespuesta()).toMinutes();
+        return (int) Math.max(0, (minutosExtra + 1) / MINUTOS_EXTENSION_ATRASO);
     }
 
     @Transactional
@@ -101,7 +139,10 @@ public class EsperaPacienteService {
         Paciente paciente = obtenerPaciente(auth0Id);
         EntradaCola entrada = obtenerEntradaActivaPaciente(paciente);
 
-        if (entrada.getEstado() == EstadoEntradaCola.ATRASADO) {
+        boolean ausenteAlLlamado = entrada.getEstado() == EstadoEntradaCola.EN_ESPERA
+                && entrada.getTipoPausa() == TipoPausaCola.AUSENTE_AL_LLAMADO;
+        if (entrada.getEstado() == EstadoEntradaCola.ATRASADO || ausenteAlLlamado) {
+            // Ya lo habían llamado: vuelve primero entre los pacientes de su misma prioridad.
             entrada.setOrdenRelativo(obtenerOrdenParaPrimerLugarDePrioridad(entrada));
         } else if (entrada.getEstado() != EstadoEntradaCola.EN_ESPERA || entrada.getTipoPausa() != TipoPausaCola.ESPERA_MANUAL) {
             throw new IllegalStateException("El paciente no puede volver a la cola desde el estado actual");
@@ -299,6 +340,12 @@ public class EsperaPacienteService {
         dto.setEstadoEntradaCola(entrada.getEstado());
         dto.setTipoPausa(entrada.getTipoPausa());
         dto.setFechaHoraLimiteRespuesta(entrada.getFechaHoraLimiteRespuesta());
+        boolean puedePedirTiempo = entrada.getEstado() == EstadoEntradaCola.ATRASADO
+                || entrada.getEstado() == EstadoEntradaCola.EN_ESPERA
+                && entrada.getTipoPausa() == TipoPausaCola.AUSENTE_AL_LLAMADO;
+        dto.setExtensionesRestantes(puedePedirTiempo
+                ? Math.max(0, MAX_EXTENSIONES_ATRASO - extensionesUsadas(entrada)) : 0);
+        dto.setMinutosPorExtension(MINUTOS_EXTENSION_ATRASO);
         Sector sector = entrada.getConsultaMedica().getSector();
         dto.setSectorId(sector != null ? sector.getId() : null);
         dto.setNombreSector(sector != null ? sector.getNombre() : null);
