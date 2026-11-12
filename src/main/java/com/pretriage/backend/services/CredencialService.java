@@ -206,7 +206,7 @@ public class CredencialService {
 
         Credencial credencial = this.obtenerCredencialYVerificarPermiso(paciente.getId(), idCredencial);
 
-        ObraSocial obraSocial = validarObraSocialEditada(request, paciente, null);
+        ObraSocial obraSocial = validarObraSocialEditada(request, paciente, idCredencial);
 
         credencial.setObraSocial(obraSocial);
         credencial.setNumeroAfiliado(request.getNumeroAfiliado());
