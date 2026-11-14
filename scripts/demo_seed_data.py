@@ -15,8 +15,10 @@ from typing import Any
 
 if __package__:
     from .demo_seed_catalogs import build_health_insurance_sql
+    from .demo_sectores import NOMBRE_SECTOR, nombre_sala
 else:
     from demo_seed_catalogs import build_health_insurance_sql
+    from demo_sectores import NOMBRE_SECTOR, nombre_sala
 
 
 SPECIALTIES: tuple[tuple[str, str], ...] = (
@@ -648,14 +650,14 @@ BEGIN
 END
 $demo$;""")
             sector_key = f"{hospital['key']}:{code}"
-            sector_name = f"DEMO {seed_key} {code}"
+            sector_name = NOMBRE_SECTOR[code]
             lines.append(_registry_block(seed_key, "sector", sector_key, "sector",
                 f"id_hospital = {hospital_ref} AND id_especialidad = {specialty_ref} AND nombre = {_sql(sector_name)}",
                 "INSERT INTO sector(nombre, activa, id_hospital, id_especialidad) "
                 f"VALUES ({_sql(sector_name)}, TRUE, {hospital_ref}, {specialty_ref})"))
             sector_ref = _registry_ref(seed_key, "sector", sector_key)
             for room_no in (1, 2):
-                room_name = f"DEMO {seed_key} Consultorio {room_no} {code}"
+                room_name = nombre_sala(room_no)
                 room_key = f"{sector_key}:room{room_no}"
                 lines.append(_registry_block(seed_key, "room", room_key, "sala",
                     f"id_hospital = {hospital_ref} AND id_especialidad_medica = {specialty_ref} AND id_sector = {sector_ref} AND nombre = {_sql(room_name)}",
