@@ -200,7 +200,6 @@ package "Consultas y atención" {
   entity "consulta_medica" as consulta_medica {
     * id: bigint <<PK,NN>>
       fecha_hora_creacion: timestamp
-      codigo_llamado: varchar <<UQ>>
       id_hospital: bigint <<FK>>
       id_especialidad_medica: bigint <<FK>>
       id_medico: bigint <<FK>>

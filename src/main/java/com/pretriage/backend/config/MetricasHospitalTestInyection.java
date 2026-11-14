@@ -29,7 +29,7 @@ import java.util.List;
  * 01/10/2026 y el 23/10/2026, con 269 atenciones finalizadas. No crea usuarios ni
  * membresías: la membresía {@code ADMIN_HOSPITAL} debe existir para consultar el endpoint.</p>
  *
- * <p>Si el hospital no existe o ya hay consultas con el prefijo {@value #PREFIJO_LLAMADO},
+ * <p>Si el hospital no existe o ya hay consultas en el sector de demostración,
  * no inserta nada. La propiedad de activación no tiene valor predeterminado, por lo que
  * este seed no participa en el arranque normal de la aplicación.</p>
  */
@@ -40,7 +40,6 @@ import java.util.List;
 public class MetricasHospitalTestInyection implements ApplicationRunner {
 
     private static final String ESPECIALIDAD_CODIGO = "CLINICA_MEDICA";
-    private static final String PREFIJO_LLAMADO = "MTR-";
     private static final String NOMBRE_SECTOR = "Sector metricas demo";
     private static final String NOMBRE_SALA = "Sala metricas demo";
     private static final String MATRICULA_MEDICO = "MTR-DEMO-001";
@@ -90,8 +89,8 @@ public class MetricasHospitalTestInyection implements ApplicationRunner {
 
         Long especialidadId = buscarEspecialidad();
         if (yaSembrado(hospitalId)) {
-            log.info("Seed de métricas omitido: ya existen consultas '{}' en el hospital {}.",
-                    PREFIJO_LLAMADO + "%", hospitalId);
+            log.info("Seed de métricas omitido: ya existen consultas en '{}' del hospital {}.",
+                    NOMBRE_SECTOR, hospitalId);
             return;
         }
 
@@ -224,8 +223,9 @@ public class MetricasHospitalTestInyection implements ApplicationRunner {
 
     private boolean yaSembrado(Long hospitalId) {
         Long cantidad = jdbcTemplate.queryForObject(
-                "select count(*) from consulta_medica where id_hospital = ? and codigo_llamado like ?",
-                Long.class, hospitalId, PREFIJO_LLAMADO + "%");
+                "select count(*) from consulta_medica c join sector s on s.id = c.id_sector "
+                        + "where c.id_hospital = ? and s.nombre = ?",
+                Long.class, hospitalId, NOMBRE_SECTOR);
         return cantidad != null && cantidad > 0;
     }
 
@@ -345,15 +345,14 @@ public class MetricasHospitalTestInyection implements ApplicationRunner {
         return jdbcTemplate.queryForObject(
                 """
                         insert into consulta_medica
-                        (fecha_hora_creacion, codigo_llamado, id_hospital, id_especialidad_medica,
+                        (fecha_hora_creacion, id_hospital, id_especialidad_medica,
                          id_medico, id_sala, id_sector, id_paciente, nivel_de_gravedad_bot,
                          nivel_de_gravedad_medico, resumen_pretriage_json, estado_consulta, id_chat)
-                        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         returning id
                         """,
                 Long.class,
                 Timestamp.valueOf(fechaHoraCreacion),
-                PREFIJO_LLAMADO + String.format("%04d", secuencia),
                 hospitalId,
                 especialidadId,
                 medicoId,

@@ -180,7 +180,6 @@ class AtencionMedicoServiceTest {
                 paciente.setApellido("Pérez");
                 ConsultaMedica consulta = new ConsultaMedica();
                 consulta.setId(5L);
-                consulta.setCodigoLlamado("A-005");
                 consulta.setPaciente(paciente);
                 consulta.setEstadoConsulta(EstadoConsulta.EN_COLA);
                 consulta.setNivelDeGravedadBot(NivelDeGravedad.URGENTE);
@@ -720,7 +719,6 @@ class AtencionMedicoServiceTest {
                 paciente.setTipoDocumento(com.pretriage.backend.model.personas.TipoDocumento.DNI);
                 ConsultaMedica consulta = new ConsultaMedica();
                 consulta.setId(5L);
-                consulta.setCodigoLlamado("A-005");
                 consulta.setPaciente(paciente);
                 consulta.setEstadoConsulta(EstadoConsulta.EN_COLA);
                 consulta.setNivelDeGravedadBot(NivelDeGravedad.URGENTE);
@@ -906,7 +904,6 @@ class AtencionMedicoServiceTest {
                 paciente.setTipoDocumento(com.pretriage.backend.model.personas.TipoDocumento.DNI);
                 ConsultaMedica consulta = new ConsultaMedica();
                 consulta.setId(5L);
-                consulta.setCodigoLlamado("A-010");
                 consulta.setPaciente(paciente);
                 consulta.setEstadoConsulta(EstadoConsulta.EN_COLA);
                 consulta.setNivelDeGravedadBot(NivelDeGravedad.MUY_URGENTE);

@@ -11,7 +11,6 @@ import lombok.Setter;
 public class ConsultaLlamadaDTO {
 
     private Long consultaId;
-    private String codigoLlamado;
 
     private Long pacienteId;
 

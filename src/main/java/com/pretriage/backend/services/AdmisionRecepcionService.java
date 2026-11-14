@@ -28,7 +28,6 @@ import java.time.YearMonth;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -164,7 +163,6 @@ public class AdmisionRecepcionService {
         consulta.setEspecialidad(especialidad);
         consulta.setFechaHoraCreacion(LocalDateTime.now());
         consulta.setEstadoConsulta(EstadoConsulta.PRETRIAGE_EN_PROCESO);
-        consulta.setCodigoLlamado(generarCodigoLlamado());
         asignacionSectorService.asignarSector(consulta);
         repoConsultasMedicas.save(consulta);
         AdmisionRecepcion admision = new AdmisionRecepcion();
@@ -335,11 +333,10 @@ public class AdmisionRecepcionService {
                 || admision.getEstado() == EstadoAdmisionRecepcion.FORMULARIO_COMPLETO;
     }
 
-    private String generarCodigoLlamado() { return "R-" + UUID.randomUUID().toString().substring(0, 6).toUpperCase(); }
     private String escribir(Object valor) { try { return objectMapper.writeValueAsString(valor); } catch (Exception e) { throw new IllegalStateException("No se pudo guardar el formulario", e); } }
     private NivelDeGravedad prioridad(int valor) { return switch (valor) { case 5 -> NivelDeGravedad.RIESGO_VITAL_INMEDIATO; case 4 -> NivelDeGravedad.MUY_URGENTE; case 3 -> NivelDeGravedad.URGENTE; case 2 -> NivelDeGravedad.NORMAL; default -> NivelDeGravedad.NO_URGENTE; }; }
     private SesionRecepcionDTO mapear(SesionRecepcion s) { return new SesionRecepcionDTO(s.getId(), s.getHospital().getId(), s.getHospital().getNombre(), s.getEstado(), s.getFechaHoraInicio(), s.getFechaHoraFin()); }
-    private AdmisionRecepcionDTO mapear(AdmisionRecepcion a, TiempoEstimadoAtencionResponse e) { ConsultaMedica c=a.getConsultaMedica(); return new AdmisionRecepcionDTO(a.getId(), c.getId(), c.getPaciente().getId(), c.getCodigoLlamado(), a.getEstado(), c.getNivelDeGravedadBot(), c.getSector() != null ? c.getSector().getId() : null, c.getSector() != null ? c.getSector().getNombre() : null, e); }
+    private AdmisionRecepcionDTO mapear(AdmisionRecepcion a, TiempoEstimadoAtencionResponse e) { ConsultaMedica c=a.getConsultaMedica(); return new AdmisionRecepcionDTO(a.getId(), c.getId(), c.getPaciente().getId(), a.getEstado(), c.getNivelDeGravedadBot(), c.getSector() != null ? c.getSector().getId() : null, c.getSector() != null ? c.getSector().getNombre() : null, e); }
 
     private TiempoEstimadoAtencionResponse estimacionActual(AdmisionRecepcion admision) {
         ConsultaMedica consulta = admision.getConsultaMedica();
@@ -366,7 +363,7 @@ public class AdmisionRecepcionService {
         return new AdmisionRecepcionDetalleDTO(
                 admision.getId(), consulta.getId(), admision.getSesionRecepcion().getId(), paciente.getId(),
                 dni, nombre, apellido, hospital.getId(), hospital.getNombre(),
-                especialidad.getCodigo(), especialidad.getNombre(), consulta.getCodigoLlamado(),
+                especialidad.getCodigo(), especialidad.getNombre(),
                 admision.getEstado(), consulta.getNivelDeGravedadBot(), admision.getFechaHoraInicio(),
                 admision.getFechaHoraFinalizacion(), admision.getFechaHoraCancelacion(), estimacion,
                 Boolean.TRUE.equals(admision.getCoberturaConfirmada()),

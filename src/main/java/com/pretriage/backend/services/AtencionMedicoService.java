@@ -618,7 +618,6 @@ public class AtencionMedicoService {
     private ConsultaLlamadaDTO mapearConsultaLlamada(ConsultaMedica consulta) {
         ConsultaLlamadaDTO dto = new ConsultaLlamadaDTO();
         dto.setConsultaId(consulta.getId());
-        dto.setCodigoLlamado(consulta.getCodigoLlamado());
         Paciente paciente = consulta.getPaciente();
 
         dto.setPacienteId(paciente.getId());
