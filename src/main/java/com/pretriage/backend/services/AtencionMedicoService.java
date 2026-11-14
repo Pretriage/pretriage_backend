@@ -30,6 +30,7 @@ import com.pretriage.backend.model.personas.Paciente;
 import com.pretriage.backend.repositories.*;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
@@ -73,6 +74,7 @@ public class AtencionMedicoService {
     private final UsuariosService usuariosService;
     private final SalaService salaService;
     private final EstudioClinicoService estudioClinicoService;
+    private final ApplicationEventPublisher eventos;
 
     public List<AsignacionMedicoDTO> obtenerAsignaciones(String auth0Id) {
         Medico medico = obtenerMedico(auth0Id);
@@ -297,6 +299,7 @@ public class AtencionMedicoService {
         entrada.setEstado(EstadoEntradaCola.LLAMADO);
         entrada.setFechaHoraLlamado(LocalDateTime.now());
         consulta.setEstadoConsulta(EstadoConsulta.LLAMADO);
+        eventos.publishEvent(CambioEstadoConsultaEvento.desde(entrada));
 
         return mapearConsultaLlamada(consulta);
     }
@@ -344,6 +347,7 @@ public class AtencionMedicoService {
         repoAtencionesMedicas.save(atencion);
         repoEntradasCola.save(entrada);
         repoConsultasMedicas.save(consulta);
+        eventos.publishEvent(CambioEstadoConsultaEvento.desde(entrada));
         return mapearConsultaLlamada(consulta);
     }
 
@@ -430,6 +434,7 @@ public class AtencionMedicoService {
         consulta.setEstadoConsulta(EstadoConsulta.EN_ESPERA);
         repoEntradasCola.save(entrada);
         repoConsultasMedicas.save(consulta);
+        eventos.publishEvent(CambioEstadoConsultaEvento.desde(entrada));
         return mapearConsultaLlamada(consulta);
     }
 
@@ -455,6 +460,7 @@ public class AtencionMedicoService {
         repoAtencionesMedicas.save(atencion);
         repoEntradasCola.save(entrada);
         repoConsultasMedicas.save(consulta);
+        eventos.publishEvent(CambioEstadoConsultaEvento.desde(entrada));
         return mapearConsultaLlamada(consulta);
     }
 
