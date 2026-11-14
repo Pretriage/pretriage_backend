@@ -195,3 +195,37 @@ datasource explícito y Docker Compose de Spring deshabilitado. La prueba de
 persistencia rechaza nombres de bases que no sean de pruebas aisladas y ejecuta
 el cuerpo del SQL dentro de la transacción del test, verificando después del
 rollback que no queden hospitales ni tablas de control del fixture.
+
+## Hospitales operativos para la demo
+
+`scripts/demo_hospitales_operativos.py` deja los hospitales listos para una
+presentación, en una sola transacción y sin borrar filas:
+
+- agrega las especialidades nuevas (Cirugía general, Neurología, Oftalmología,
+  Otorrinolaringología, Urología y Salud mental; el backend también las crea al
+  arrancar con `EspecialidadesMedicasSeeder`);
+- da de alta 15 hospitales y sanatorios de CABA de
+  `scripts/data/demo_hospitales_operativos.json`, con las especialidades que
+  atiende cada uno, su sector, dos consultorios y su cola;
+- renombra los sectores con el nombre real de la guardia según la especialidad
+  (`scripts/demo_sectores.py`), por ejemplo "Guardia de Pediatría", y los
+  consultorios de la carga histórica a "Consultorio N";
+- cierra todas las atenciones abiertas: cancela consultas y entradas de cola
+  activas, finaliza atenciones en curso y cancela admisiones sin terminar;
+- deja un médico de guardia ficticio (sin usuario) activo en cada sector sin
+  médicos, para que el hospital figure disponible;
+- ingresa pacientes ficticios a la cola de cada sector de todos los hospitales.
+
+```powershell
+python scripts/demo_hospitales_operativos.py                                  # vista previa
+python scripts/demo_hospitales_operativos.py --export-sql target/operativo.sql
+python scripts/demo_hospitales_operativos.py --apply --target docker
+python scripts/demo_hospitales_operativos.py --apply --target aws --profile pretriage --env-file .env.demo
+```
+
+Con `GOOGLE_MAPS_API_KEY` en `--env-file` se resuelven los Place IDs de los
+hospitales nuevos. Sin Place ID el hospital se crea igual, pero no aparece en el
+listado de la app hasta volver a correr el script con la clave. Las coordenadas
+del catálogo son aproximadas. Correrlo de nuevo no duplica hospitales ni
+sectores; vuelve a vaciar las colas y a ingresar pacientes nuevos.
+`--pacientes-por-sector N` (0 a 10) y `--sin-medicos-guardia` ajustan la carga.

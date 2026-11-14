@@ -99,8 +99,18 @@ class DemoSeedScriptPersistenceTest {
                 JOIN demo_seed_registry r ON r.entity_id = hem.id_hospital
                 WHERE r.seed_key = ? AND r.entity_type = 'hospital'
                 """, SEED_KEY));
-        assertEquals(10L, count("SELECT COUNT(*) FROM sector WHERE nombre LIKE 'DEMO demo-fixture-v1 %'"));
-        assertEquals(20L, count("SELECT COUNT(*) FROM sala WHERE nombre LIKE 'DEMO demo-fixture-v1 %'"));
+        // Sectores y consultorios con nombres reales de guardia (scripts/demo_sectores.py).
+        assertEquals(10L, count("""
+                SELECT COUNT(*) FROM sector s
+                JOIN demo_seed_registry r ON r.entity_id = s.id
+                WHERE r.seed_key = ? AND r.entity_type = 'sector'
+                  AND (s.nombre LIKE 'Guardia de %' OR s.nombre = 'Unidad de Dolor Torácico')
+                """, SEED_KEY));
+        assertEquals(20L, count("""
+                SELECT COUNT(*) FROM sala s
+                JOIN demo_seed_registry r ON r.entity_id = s.id
+                WHERE r.seed_key = ? AND r.entity_type = 'room' AND s.nombre IN ('Consultorio 1', 'Consultorio 2')
+                """, SEED_KEY));
         assertEquals(10L, count("""
                 SELECT COUNT(*) FROM gestor_de_cola g
                 JOIN demo_seed_registry r ON r.entity_id = g.id_hospital

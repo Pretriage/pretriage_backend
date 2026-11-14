@@ -98,9 +98,11 @@ public class SesionesMedicasAdminService {
                 ? sesion.getSector()
                 : sesion.getSala() == null ? null : sesion.getSala().getSector();
         Sala sala = sesion.getSala();
-        String medicoNombre = Stream.of(
-                        sesion.getMedico().getUsuarioAuth().getNombre(),
-                        sesion.getMedico().getUsuarioAuth().getApellido())
+        // Los médicos de guardia de demostración no tienen usuario para iniciar sesión.
+        var usuario = sesion.getMedico().getUsuarioAuth();
+        String medicoNombre = usuario == null ? "Médico de guardia" : Stream.of(
+                        usuario.getNombre(),
+                        usuario.getApellido())
                 .filter(value -> value != null && !value.isBlank())
                 .collect(Collectors.joining(" "));
         return new SesionMedicaAdminResponse(

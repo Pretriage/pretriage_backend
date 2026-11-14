@@ -10,6 +10,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
@@ -28,18 +31,53 @@ public class TiempoEstimadoNotifier {
     private final EstimacionAtencionService estimacionAtencionService;
     private final Map<Long, CopyOnWriteArrayList<SseEmitter>> conexiones = new ConcurrentHashMap<>();
 
+    static final String EVENTO_TIEMPO_ESTIMADO = "tiempo-estimado";
+    static final String EVENTO_ESTADO_CONSULTA = "estado-consulta";
+
+    /**
+     * Abre el canal de la consulta mientras siga activa (en cola, llamada, en pausa o en atención),
+     * para que al paciente le lleguen los cambios de estado aunque ya no esté esperando en la fila.
+     * Al conectarse recibe el estado actual; si la consulta ya terminó, lo recibe y el canal se cierra.
+     */
+    @Transactional(readOnly = true)
     public SseEmitter conectar(String auth0Id, Long consultaId) {
         if (!repoConsultasMedicas.existsByIdAndPacienteUsuarioAuthId(consultaId, auth0Id)) {
             throw new AccessDeniedException("No tiene permisos sobre la consulta");
         }
-        EntradaCola entrada = obtenerEntradaActiva(consultaId);
+        EntradaCola entrada = repoEntradasCola.findByConsultaMedicaId(consultaId)
+                .orElseThrow(() -> new NoSuchElementException("La consulta no esta en cola"));
+        CambioEstadoConsultaEvento estadoActual = CambioEstadoConsultaEvento.desde(entrada);
         SseEmitter emitter = new SseEmitter(0L);
+        if (estadoActual.esTerminal()) {
+            enviar(consultaId, emitter, EVENTO_ESTADO_CONSULTA, estadoActual);
+            emitter.complete();
+            return emitter;
+        }
         conexiones.computeIfAbsent(consultaId, ignored -> new CopyOnWriteArrayList<>()).add(emitter);
         emitter.onCompletion(() -> desconectar(consultaId, emitter));
         emitter.onTimeout(() -> desconectar(consultaId, emitter));
         emitter.onError(error -> desconectar(consultaId, emitter));
-        enviar(consultaId, emitter, "tiempo-estimado", estimacionAtencionService.calcularPara(entrada.getConsultaMedica()));
+        enviar(consultaId, emitter, EVENTO_ESTADO_CONSULTA, estadoActual);
+        if (entrada.getEstado() == EstadoEntradaCola.EN_COLA) {
+            enviar(consultaId, emitter, EVENTO_TIEMPO_ESTIMADO,
+                    estimacionAtencionService.calcularPara(entrada.getConsultaMedica()));
+        }
         return emitter;
+    }
+
+    /**
+     * Avisa al paciente que cambió el estado de su consulta. Se ejecuta recién cuando la transacción
+     * que hizo el cambio confirma, para no avisar algo que después se deshizo.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void notificarCambioDeEstado(CambioEstadoConsultaEvento evento) {
+        List<SseEmitter> emitters = conexiones.get(evento.consultaId());
+        if (emitters == null) return;
+        emitters.forEach(emitter -> enviar(evento.consultaId(), emitter, EVENTO_ESTADO_CONSULTA, evento));
+        if (evento.esTerminal()) {
+            emitters.forEach(SseEmitter::complete);
+            conexiones.remove(evento.consultaId());
+        }
     }
 
     @Scheduled(fixedRate = 15000)
@@ -48,7 +86,7 @@ public class TiempoEstimadoNotifier {
             try {
                 EntradaCola entrada = obtenerEntradaActiva(consultaId);
                 TiempoEstimadoAtencionResponse estimacion = estimacionAtencionService.calcularPara(entrada.getConsultaMedica());
-                emitters.forEach(emitter -> enviar(consultaId, emitter, "tiempo-estimado", estimacion));
+                emitters.forEach(emitter -> enviar(consultaId, emitter, EVENTO_TIEMPO_ESTIMADO, estimacion));
             } catch (RuntimeException error) {
                 log.debug("Ya no se puede estimar la consulta {}: {}", consultaId, error.getMessage());
             }

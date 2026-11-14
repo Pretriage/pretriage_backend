@@ -9,7 +9,7 @@ public record AdmisionRecepcionDetalleDTO(
         Long id, Long consultaId, Long sesionId, Long pacienteId,
         String pacienteDni, String pacienteNombre, String pacienteApellido,
         Long hospitalId, String hospitalNombre,
-        String especialidadCodigo, String especialidadNombre, String codigoLlamado,
+        String especialidadCodigo, String especialidadNombre,
         EstadoAdmisionRecepcion estado, NivelDeGravedad prioridad,
         LocalDateTime fechaHoraInicio, LocalDateTime fechaHoraFinalizacion,
         LocalDateTime fechaHoraCancelacion, TiempoEstimadoAtencionResponse estimacion,

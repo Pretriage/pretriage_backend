@@ -18,6 +18,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -46,6 +47,7 @@ public class EsperaPacienteService {
     private final RepoConsultasMedicas repoConsultasMedicas;
     private final RepoChat repoChat;
     private final EstimacionAtencionService estimacionAtencionService;
+    private final ApplicationEventPublisher eventos;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -298,6 +300,7 @@ public class EsperaPacienteService {
             consulta.setEstadoConsulta(EstadoConsulta.CANCELADA);
             repoConsultasMedicas.save(consulta);
             repoEntradasCola.save(entrada);
+            eventos.publishEvent(CambioEstadoConsultaEvento.desde(entrada));
         });
     }
     private Paciente obtenerPaciente(String auth0Id) {

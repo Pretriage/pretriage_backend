@@ -1,0 +1,377 @@
+{
+  "version": 1,
+  "notas": "Hospitales nuevos con dirección pública y coordenadas aproximadas (se refinan con el Place ID de Google al resolverlo). Las especialidades se eligieron según las guardias que cada institución publica; salas, médicos de guardia y pacientes generados son ficticios.",
+  "hospitales_existentes": [
+    {
+      "key": "aleman",
+      "name": "Hospital Alemán",
+      "place_id": "ChIJ8RU6FJrKvJURUS7bPtw1_K8",
+      "especialidades": [
+        "CIRUGIA_GENERAL",
+        "NEUROLOGIA",
+        "OFTALMOLOGIA",
+        "UROLOGIA"
+      ]
+    },
+    {
+      "key": "italiano",
+      "name": "Hospital Italiano",
+      "place_id": "ChIJVT5KXWfLvJURb2vMNlSWWoU",
+      "especialidades": [
+        "CIRUGIA_GENERAL",
+        "NEUROLOGIA",
+        "OFTALMOLOGIA",
+        "OTORRINOLARINGOLOGIA",
+        "UROLOGIA",
+        "SALUD_MENTAL"
+      ]
+    },
+    {
+      "key": "britanico",
+      "name": "Hospital Británico de Buenos Aires",
+      "place_id": "ChIJxzIHXznLvJUR4uLX09Se8Co",
+      "especialidades": [
+        "CIRUGIA_GENERAL",
+        "NEUROLOGIA",
+        "OFTALMOLOGIA",
+        "SALUD_MENTAL"
+      ]
+    },
+    {
+      "key": "favaloro",
+      "name": "Fundación Favaloro",
+      "place_id": "ChIJiV8MSNzKvJURbMWwjy0HYjI",
+      "especialidades": [
+        "CIRUGIA_GENERAL",
+        "NEUROLOGIA"
+      ]
+    },
+    {
+      "key": "arcos",
+      "name": "Sanatorio de los Arcos",
+      "place_id": "ChIJt6bcA5C1vJURRD5e4nJ0cF0",
+      "especialidades": [
+        "CIRUGIA_GENERAL",
+        "OFTALMOLOGIA",
+        "UROLOGIA"
+      ]
+    },
+    {
+      "key": "colegiales",
+      "name": "Sanatorio Colegiales",
+      "place_id": "ChIJ55Asp8K1vJURgcW94SHpiJo",
+      "especialidades": [
+        "CIRUGIA_GENERAL",
+        "OTORRINOLARINGOLOGIA"
+      ]
+    },
+    {
+      "key": "guemes",
+      "name": "Sanatorio Güemes",
+      "place_id": "ChIJNRfDkHzKvJURmIEYjCVmkaA",
+      "especialidades": [
+        "CIRUGIA_GENERAL",
+        "NEUROLOGIA",
+        "UROLOGIA"
+      ]
+    },
+    {
+      "key": "cemic",
+      "name": "CEMIC - Sede Saavedra",
+      "place_id": "ChIJSfwAEe-2vJURgAhXF2GSF0E",
+      "especialidades": [
+        "CIRUGIA_GENERAL",
+        "OFTALMOLOGIA",
+        "OTORRINOLARINGOLOGIA"
+      ]
+    }
+  ],
+  "hospitales_nuevos": [
+    {
+      "key": "clinicas",
+      "name": "Hospital de Clínicas José de San Martín",
+      "street": "Av. Córdoba",
+      "number": 2351,
+      "latitude": -34.598401,
+      "longitude": -58.399836,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "CARDIOLOGIA",
+        "GINECOLOGIA",
+        "NEUROLOGIA",
+        "OFTALMOLOGIA",
+        "OTORRINOLARINGOLOGIA",
+        "UROLOGIA",
+        "SALUD_MENTAL"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "fernandez",
+      "name": "Hospital General de Agudos Juan A. Fernández",
+      "street": "Cerviño",
+      "number": 3356,
+      "latitude": -34.58112,
+      "longitude": -58.40689,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "PEDIATRIA",
+        "GINECOLOGIA",
+        "CARDIOLOGIA",
+        "OFTALMOLOGIA",
+        "SALUD_MENTAL"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "rivadavia",
+      "name": "Hospital General de Agudos Bernardino Rivadavia",
+      "street": "Av. Las Heras",
+      "number": 2670,
+      "latitude": -34.5837,
+      "longitude": -58.401,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "GINECOLOGIA",
+        "PEDIATRIA",
+        "UROLOGIA"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "argerich",
+      "name": "Hospital General de Agudos Cosme Argerich",
+      "street": "Pi y Margall",
+      "number": 750,
+      "latitude": -34.6287,
+      "longitude": -58.3647,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "PEDIATRIA",
+        "GINECOLOGIA",
+        "CARDIOLOGIA",
+        "NEUROLOGIA",
+        "SALUD_MENTAL"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "ramosmejia",
+      "name": "Hospital General de Agudos José M. Ramos Mejía",
+      "street": "Gral. Urquiza",
+      "number": 609,
+      "latitude": -34.6175,
+      "longitude": -58.4085,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "CARDIOLOGIA",
+        "NEUROLOGIA",
+        "GINECOLOGIA",
+        "SALUD_MENTAL"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "durand",
+      "name": "Hospital General de Agudos Carlos G. Durand",
+      "street": "Av. Díaz Vélez",
+      "number": 5044,
+      "latitude": -34.6094,
+      "longitude": -58.438,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "PEDIATRIA",
+        "GINECOLOGIA",
+        "CARDIOLOGIA",
+        "SALUD_MENTAL"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "pirovano",
+      "name": "Hospital General de Agudos Ignacio Pirovano",
+      "street": "Monroe",
+      "number": 3555,
+      "latitude": -34.5602,
+      "longitude": -58.4714,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "PEDIATRIA",
+        "GINECOLOGIA",
+        "SALUD_MENTAL"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "santojanni",
+      "name": "Hospital General de Agudos Donación Francisco Santojanni",
+      "street": "Pilar",
+      "number": 950,
+      "latitude": -34.6469,
+      "longitude": -58.5151,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "PEDIATRIA",
+        "GINECOLOGIA",
+        "CARDIOLOGIA",
+        "SALUD_MENTAL"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "alvarez",
+      "name": "Hospital General de Agudos Dr. Teodoro Álvarez",
+      "street": "Aranguren",
+      "number": 2701,
+      "latitude": -34.6232,
+      "longitude": -58.4697,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "PEDIATRIA",
+        "GINECOLOGIA"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "tornu",
+      "name": "Hospital General de Agudos Dr. Enrique Tornú",
+      "street": "Combatientes de Malvinas",
+      "number": 3002,
+      "latitude": -34.5888,
+      "longitude": -58.479,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "CARDIOLOGIA",
+        "NEUROLOGIA"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "garrahan",
+      "name": "Hospital de Pediatría Prof. Dr. Juan P. Garrahan",
+      "street": "Combate de los Pozos",
+      "number": 1881,
+      "latitude": -34.6302,
+      "longitude": -58.3916,
+      "especialidades": [
+        "PEDIATRIA"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "gutierrez",
+      "name": "Hospital General de Niños Ricardo Gutiérrez",
+      "street": "Gallo",
+      "number": 1330,
+      "latitude": -34.5944,
+      "longitude": -58.4137,
+      "especialidades": [
+        "PEDIATRIA"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "otamendi",
+      "name": "Sanatorio Otamendi",
+      "street": "Azcuénaga",
+      "number": 870,
+      "latitude": -34.5975,
+      "longitude": -58.4011,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "PEDIATRIA",
+        "GINECOLOGIA",
+        "CARDIOLOGIA",
+        "UROLOGIA"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "finochietto",
+      "name": "Sanatorio Finochietto",
+      "street": "Av. Córdoba",
+      "number": 2678,
+      "latitude": -34.598,
+      "longitude": -58.404,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "CARDIOLOGIA",
+        "GINECOLOGIA",
+        "NEUROLOGIA",
+        "OFTALMOLOGIA"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    },
+    {
+      "key": "trinidad",
+      "name": "Sanatorio de la Trinidad Palermo",
+      "street": "Cerviño",
+      "number": 4720,
+      "latitude": -34.5779,
+      "longitude": -58.4254,
+      "especialidades": [
+        "CLINICA_MEDICA",
+        "TRAUMATOLOGIA",
+        "CIRUGIA_GENERAL",
+        "PEDIATRIA",
+        "GINECOLOGIA",
+        "CARDIOLOGIA"
+      ],
+      "city": "CABA",
+      "province": "Ciudad Autónoma de Buenos Aires",
+      "place_id": null
+    }
+  ]
+}

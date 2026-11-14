@@ -55,6 +55,7 @@ class EsperaPacienteServiceTest {
     @Mock RepoChat repoChat;
     @Mock EntityManager entityManager;
     @Mock EstimacionAtencionService estimacionAtencionService;
+    @Mock org.springframework.context.ApplicationEventPublisher eventos;
     @InjectMocks EsperaPacienteService service;
 
     @org.junit.jupiter.api.BeforeEach
@@ -81,6 +82,10 @@ class EsperaPacienteServiceTest {
         assertEquals(EstadoConsulta.CANCELADA, consulta.getEstadoConsulta());
         verify(repoEntradasCola).save(entrada);
         verify(repoConsultasMedicas).save(consulta);
+        verify(eventos).publishEvent(org.mockito.ArgumentMatchers.<Object>argThat(evento ->
+                evento instanceof CambioEstadoConsultaEvento cambio
+                        && cambio.estado() == EstadoEntradaCola.CANCELADA
+                        && cambio.consultaId().equals(5L)));
     }
 
     @Test

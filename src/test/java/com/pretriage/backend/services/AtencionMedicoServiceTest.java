@@ -23,6 +23,7 @@ import com.pretriage.backend.model.chat.Mensaje;
 import com.pretriage.backend.repositories.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -31,6 +32,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
 
@@ -84,6 +86,8 @@ class AtencionMedicoServiceTest {
         GestionDeArchivosService gestionDeArchivosService;
         @Mock
         EstudioClinicoService estudioClinicoService;
+        @Mock
+        ApplicationEventPublisher eventos;
 
         @Test
         void noIniciaSesionSiMembresiaMedicaDelHospitalEstaRevocada() {
@@ -180,7 +184,6 @@ class AtencionMedicoServiceTest {
                 paciente.setApellido("Pérez");
                 ConsultaMedica consulta = new ConsultaMedica();
                 consulta.setId(5L);
-                consulta.setCodigoLlamado("A-005");
                 consulta.setPaciente(paciente);
                 consulta.setEstadoConsulta(EstadoConsulta.EN_COLA);
                 consulta.setNivelDeGravedadBot(NivelDeGravedad.URGENTE);
@@ -381,6 +384,11 @@ class AtencionMedicoServiceTest {
                 service.llamarConsulta("auth0", 20L, 50L);
 
                 assertEquals(llamado, contexto.entrada().getFechaHoraLlamado());
+                // Se avisa al paciente una sola vez, aunque el médico repita el llamado.
+                ArgumentCaptor<CambioEstadoConsultaEvento> aviso = ArgumentCaptor.forClass(CambioEstadoConsultaEvento.class);
+                verify(eventos, times(1)).publishEvent(aviso.capture());
+                assertEquals(EstadoEntradaCola.LLAMADO, aviso.getValue().estado());
+                assertEquals(50L, aviso.getValue().consultaId());
         }
 
         @Test
@@ -720,7 +728,6 @@ class AtencionMedicoServiceTest {
                 paciente.setTipoDocumento(com.pretriage.backend.model.personas.TipoDocumento.DNI);
                 ConsultaMedica consulta = new ConsultaMedica();
                 consulta.setId(5L);
-                consulta.setCodigoLlamado("A-005");
                 consulta.setPaciente(paciente);
                 consulta.setEstadoConsulta(EstadoConsulta.EN_COLA);
                 consulta.setNivelDeGravedadBot(NivelDeGravedad.URGENTE);
@@ -906,7 +913,6 @@ class AtencionMedicoServiceTest {
                 paciente.setTipoDocumento(com.pretriage.backend.model.personas.TipoDocumento.DNI);
                 ConsultaMedica consulta = new ConsultaMedica();
                 consulta.setId(5L);
-                consulta.setCodigoLlamado("A-010");
                 consulta.setPaciente(paciente);
                 consulta.setEstadoConsulta(EstadoConsulta.EN_COLA);
                 consulta.setNivelDeGravedadBot(NivelDeGravedad.MUY_URGENTE);

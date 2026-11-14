@@ -15,8 +15,10 @@ from typing import Any
 
 if __package__:
     from .demo_seed_catalogs import build_health_insurance_sql
+    from .demo_sectores import NOMBRE_SECTOR, nombre_sala
 else:
     from demo_seed_catalogs import build_health_insurance_sql
+    from demo_sectores import NOMBRE_SECTOR, nombre_sala
 
 
 SPECIALTIES: tuple[tuple[str, str], ...] = (
@@ -492,8 +494,7 @@ def _care_rows(
                 ))
 
                 seq = hospital_sequence
-                call_code = f"D{seed_short}-H{hospital_token}-{date_key}-{position + 1:03d}"
-                consult_key = call_code
+                consult_key = f"D{seed_short}-H{hospital_token}-{date_key}-{position + 1:03d}"
                 consult_ref = _registry_ref(seed_key, "consultation", consult_key)
                 is_finished = rng.random() < 0.85
                 is_triaged = rng.random() < 0.65
@@ -522,7 +523,7 @@ def _care_rows(
                 queue_state = "FINALIZADA" if is_finished else "CANCELADA"
                 consult_state = queue_state
 
-                chat_key = f"{call_code}:chat"
+                chat_key = f"{consult_key}:chat"
                 chat_ref = _registry_ref(seed_key, "chat", chat_key)
                 if is_triaged:
                     chat_time_dt = (entry_time_dt - timedelta(minutes=15)).replace(microsecond=position)
@@ -543,10 +544,10 @@ def _care_rows(
                     chat_ref = "NULL"
 
                 consult_insert = (
-                    "INSERT INTO consulta_medica(fecha_hora_creacion, codigo_llamado, id_hospital, id_especialidad_medica, "
+                    "INSERT INTO consulta_medica(fecha_hora_creacion, id_hospital, id_especialidad_medica, "
                     "id_medico, id_sala, id_sector, id_paciente, nivel_de_gravedad_bot, nivel_de_gravedad_medico, "
                     "resumen_pretriage_json, estado_consulta, id_chat) VALUES ("
-                    f"{_sql(consultation_created_dt.isoformat(sep=' '))}::timestamp, {_sql(call_code)}, {hospital_ref}, {specialty_ref}, "
+                    f"{_sql(consultation_created_dt.isoformat(sep=' '))}::timestamp, {hospital_ref}, {specialty_ref}, "
                     f"{doctor_profile if is_finished else 'NULL'}, {room_ref if is_finished else 'NULL'}, {sector_ref}, {patient_ref}, "
                     f"{_sql(severity_bot)}, {_sql(severity_doctor)}, "
                     f"{_sql(result_json if is_triaged else None)}, "
@@ -554,11 +555,12 @@ def _care_rows(
                 )
                 result.append(_registry_block(
                     seed_key, "consultation", consult_key, "consulta_medica",
-                    f"codigo_llamado = {_sql(call_code)} AND id_hospital = {hospital_ref}",
+                    f"id_paciente = {patient_ref} AND id_hospital = {hospital_ref} "
+                    f"AND fecha_hora_creacion = {_sql(consultation_created_dt.isoformat(sep=' '))}::timestamp",
                     consult_insert,
                 ))
 
-                entry_key = call_code
+                entry_key = consult_key
                 result.append(_registry_block(
                     seed_key, "queue_entry", entry_key, "entrada_cola",
                     f"id_consulta_medica = {consult_ref} AND id_gestor_de_cola = {queue_ref}",
@@ -569,7 +571,7 @@ def _care_rows(
                 ))
 
                 if is_finished:
-                    attention_key = call_code
+                    attention_key = consult_key
                     result.append(_registry_block(
                         seed_key, "attention", attention_key, "atencion_medica",
                         f"id_consulta_medica = {consult_ref}",
@@ -648,14 +650,14 @@ BEGIN
 END
 $demo$;""")
             sector_key = f"{hospital['key']}:{code}"
-            sector_name = f"DEMO {seed_key} {code}"
+            sector_name = NOMBRE_SECTOR[code]
             lines.append(_registry_block(seed_key, "sector", sector_key, "sector",
                 f"id_hospital = {hospital_ref} AND id_especialidad = {specialty_ref} AND nombre = {_sql(sector_name)}",
                 "INSERT INTO sector(nombre, activa, id_hospital, id_especialidad) "
                 f"VALUES ({_sql(sector_name)}, TRUE, {hospital_ref}, {specialty_ref})"))
             sector_ref = _registry_ref(seed_key, "sector", sector_key)
             for room_no in (1, 2):
-                room_name = f"DEMO {seed_key} Consultorio {room_no} {code}"
+                room_name = nombre_sala(room_no)
                 room_key = f"{sector_key}:room{room_no}"
                 lines.append(_registry_block(seed_key, "room", room_key, "sala",
                     f"id_hospital = {hospital_ref} AND id_especialidad_medica = {specialty_ref} AND id_sector = {sector_ref} AND nombre = {_sql(room_name)}",

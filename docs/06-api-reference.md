@@ -835,7 +835,6 @@ Response item (`ConsultaLlamadaDTO`):
 ```json
 {
   "consultaId": 5,
-  "codigoLlamado": "A-005",
   "pacienteId": 4,
   "nombrePaciente": "Juan",
   "apellidoPaciente": "Perez",

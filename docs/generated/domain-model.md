@@ -129,7 +129,6 @@ erDiagram
     CONSULTA_MEDICA {
         Long id
         LocalDateTime fechaHoraCreacion
-        String codigoLlamado
         NivelDeGravedad nivelDeGravedadBot
         NivelDeGravedad nivelDeGravedadMedico
         String resumenPretriageJson

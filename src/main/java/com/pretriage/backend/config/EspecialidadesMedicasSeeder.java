@@ -24,7 +24,13 @@ public class EspecialidadesMedicasSeeder implements ApplicationRunner {
                 new EspecialidadInicial("PEDIATRIA", "Pediatría"),
                 new EspecialidadInicial("CARDIOLOGIA", "Cardiología"),
                 new EspecialidadInicial("TRAUMATOLOGIA", "Traumatología"),
-                new EspecialidadInicial("GINECOLOGIA", "Ginecología")
+                new EspecialidadInicial("GINECOLOGIA", "Ginecología"),
+                new EspecialidadInicial("CIRUGIA_GENERAL", "Cirugía general"),
+                new EspecialidadInicial("NEUROLOGIA", "Neurología"),
+                new EspecialidadInicial("OFTALMOLOGIA", "Oftalmología"),
+                new EspecialidadInicial("OTORRINOLARINGOLOGIA", "Otorrinolaringología"),
+                new EspecialidadInicial("UROLOGIA", "Urología"),
+                new EspecialidadInicial("SALUD_MENTAL", "Salud mental")
         );
 
         especialidades.stream()

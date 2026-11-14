@@ -63,7 +63,6 @@ skinparam class {
 class ConsultaMedica {
   -id : Long
   -fechaHoraCreacion : LocalDateTime
-  -codigoLlamado : String
   -estadoConsulta : EstadoConsulta
   -nivelDeGravedadBot : NivelDeGravedad
   -nivelDeGravedadMedico : NivelDeGravedad

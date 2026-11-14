@@ -11,7 +11,6 @@ A receptionist can admit a patient identified by DNI, collect a structured clini
 - Existing digital patients are reused by matching normalized DNI against `Paciente.numeroDocumento` or `UsuarioAuth.numeroDocumento`.
 - `SesionRecepcion` selects one assigned hospital. A receptionist may work in several hospitals but can have only one active session.
 - `AdmisionRecepcion` stores the structured form and resulting triage JSON for audit.
-- `ConsultaMedica.codigoLlamado` is an anonymous public code for the hospital screen.
 - `IngresoColaService` is the shared entry point for both digital and reception flows.
 - `AsignacionSectorService.asignarSector` assigns the sector to every new
   reception consultation before it is saved; the consultation then enters the
@@ -32,7 +31,7 @@ A receptionist can admit a patient identified by DNI, collect a structured clini
    (`AsignacionSectorService`, sector with fewest `EN_COLA` among the hospital+specialty
    sectors that are active and have active rooms).
 9. The admission, consultation, and queue entry are finalized transactionally.
-10. The response includes `codigoLlamado`, the assigned `sectorId`/`nombreSector` and dynamic estimation.
+10. The response includes the assigned `sectorId`/`nombreSector` and dynamic estimation.
 11. An open admission can be resumed from its metadata or cancelled before finalization.
 
 ## Rules
