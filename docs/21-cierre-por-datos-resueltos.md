@@ -152,7 +152,9 @@ feedback fijo del backend, dentro del mismo plazo de 45 segundos.
 
 - `DATOS_RESUELTOS`: se completaron los pasos de la entrevista; los datos pueden
   estar respondidos, desconocidos o rechazados explícitamente.
-- `ALARMA`: se conserva la vía existente de cierre ante una alarma afirmada.
+- `ALARMA`: hay una alarma afirmada y se resolvieron los objetivos pendientes y la
+  invitación única. La alarma por sí sola no autoriza un cierre anticipado; el aviso
+  urgente es independiente y se muestra mientras continúa la entrevista.
 - `SOLICITUD_PACIENTE`: la persona pidió terminar.
 - `LIMITE_RECURSOS`: se alcanzó un presupuesto técnico o quedaron datos agotados.
 - `SIN_AVANCE`: se agotó el margen de respuestas sin progreso.

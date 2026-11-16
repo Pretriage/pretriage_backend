@@ -162,7 +162,8 @@ class ChatCuantificacionFlowTest {
         prepare();
         chat.agregarMensaje(new Mensaje("Tengo fiebre", AutorMensaje.PACIENTE, chat.getPaciente()));
         chat.agregarMensaje(new Mensaje("¿Qué temperatura te tomaste?", AutorMensaje.BOT, null));
-        when(provider.consultar(anyString(), anyString(), eq(true))).thenReturn(classificationWithAlarm());
+        when(provider.consultarContinuacion(anyString(), anyString(), any()))
+                .thenReturn(question("¿Qué temperatura te marcó el termómetro?"));
 
         send("38 kg celsius y me cuesta respirar");
 
@@ -171,10 +172,11 @@ class ChatCuantificacionFlowTest {
                 .filter(m -> m.getContenido().contains("me cuesta respirar"))
                 .findFirst().orElseThrow();
         assertFalse(Boolean.TRUE.equals(patientTurn.getExcluidoDelTriage()));
-        assertTrue(chat.isFinalizado());
-        verify(provider).consultar(anyString(), anyString(), eq(true));
-        verify(provider, never()).consultarContinuacion(anyString(), anyString(), any());
-        verify(queue).finalizarTriageEIngresarACola(eq("synthetic"), any(), anyString(), same(chat));
+        assertFalse(chat.isFinalizado());
+        assertTrue(chat.getMensajes().getLast().getContenido().contains(LenguajeClinicoChat.AVISO_ATENCION_URGENTE));
+        verify(provider, never()).consultar(anyString(), anyString(), eq(true));
+        verify(provider).consultarContinuacion(anyString(), anyString(), any());
+        verifyNoInteractions(queue);
     }
 
     private TriageAiResponse classificationWithAlarm() {

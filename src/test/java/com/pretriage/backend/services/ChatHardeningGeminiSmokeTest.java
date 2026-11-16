@@ -39,6 +39,7 @@ import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
@@ -238,7 +239,7 @@ class ChatHardeningGeminiSmokeTest {
     }
 
     @Test
-    void generacionYVerificacionRealesClasificanTresVecesCadaAlarmaAfirmada() {
+    void generacionYVerificacionRealesContinuanTresVecesCadaAlarmaAfirmada() {
         for (String relato : List.of("Tengo dolor de pecho", "Me falta el aire", "Tengo un sangrado abundante")) {
             for (int repeticion = 0; repeticion < 3; repeticion++) {
                 clasificaAlarmaConChatServiceReal(relato, repeticion);
@@ -259,6 +260,8 @@ class ChatHardeningGeminiSmokeTest {
         RepoEntradasCola entries = mock(RepoEntradasCola.class);
         AtencionHospitalService queue = mock(AtencionHospitalService.class);
         List<String> diagnostics = new CopyOnWriteArrayList<>();
+        List<String> providerInputs = new CopyOnWriteArrayList<>();
+        List<String> objectives = new CopyOnWriteArrayList<>();
         var calls = new AtomicInteger();
         var realGenerator = generator();
         var observedGenerator = mock(GeminiJsonClient.class);
@@ -267,6 +270,7 @@ class ChatHardeningGeminiSmokeTest {
                     int call = calls.incrementAndGet();
                     String system = invocation.getArgument(0);
                     String input = invocation.getArgument(1);
+                    providerInputs.add(input);
                     try {
                         String response = realGenerator.generar(system, input, invocation.getArgument(2),
                                 invocation.getArgument(3));
@@ -287,15 +291,33 @@ class ChatHardeningGeminiSmokeTest {
         var service = new ChatService(chats, patients, consultations, entries, queue,
                 new TriageIaClient(observedGenerator, mapper), mapper);
 
-        try {
-            service.enviarMensaje(Long.toString(id), pacienteAuth, relato);
-        } catch (RuntimeException | AssertionError error) {
-            fail("caso=" + relato + " repeticion=" + repeticion + " llamadas=" + calls.get()
-                    + " Gemini sintético: " + String.join(" || ", diagnostics), error);
-        }
+        boolean dolor = relato.equals("Tengo dolor de pecho");
+        sendQuestionTurn(service, id, pacienteAuth, chat, relato, calls, providerInputs, diagnostics,
+                objectives, "INICIO", repeticion);
+        assertFalse(chat.isFinalizado(), diagnostic(relato, repeticion, calls, diagnostics));
+        assertEquals(EstadoClasificacionChat.NO_SOLICITADA, chat.getEstadoClasificacion());
+        assertNull(chat.getResultadoTriageJson());
+        String firstBot = chat.getMensajes().getLast().getContenido().toLowerCase(Locale.ROOT);
+        assertTrue(firstBot.contains(LenguajeClinicoChat.AVISO_ATENCION_URGENTE.toLowerCase(Locale.ROOT)),
+                diagnostic(relato, repeticion, calls, diagnostics));
+        verifyNoInteractions(queue);
 
-        String label = "caso=" + relato + " repeticion=" + repeticion
-                + " llamadas=" + calls.get() + " Gemini sintético: " + String.join(" || ", diagnostics);
+        sendQuestionTurn(service, id, pacienteAuth, chat, "Hace una hora", calls, providerInputs,
+                diagnostics, objectives, dolor ? "INTENSIDAD" : "INVITACION", repeticion);
+        assertFalse(chat.isFinalizado(), diagnostic(relato, repeticion, calls, diagnostics));
+        assertNull(chat.getResultadoTriageJson());
+        verifyNoInteractions(queue);
+
+        if (dolor) {
+            sendQuestionTurn(service, id, pacienteAuth, chat, "7/10", calls, providerInputs,
+                    diagnostics, objectives, "INVITACION", repeticion);
+            assertFalse(chat.isFinalizado(), diagnostic(relato, repeticion, calls, diagnostics));
+            assertNull(chat.getResultadoTriageJson());
+            verifyNoInteractions(queue);
+        }
+        sendFinalTurn(service, id, pacienteAuth, "No, nada más.", calls, diagnostics, repeticion);
+
+        String label = diagnostic(relato, repeticion, calls, diagnostics);
         assertTrue(chat.isFinalizado(), label);
         assertEquals(EstadoClasificacionChat.COMPLETADA, chat.getEstadoClasificacion(), label);
         assertFalse(chat.isCierreParcial(), label);
@@ -306,14 +328,65 @@ class ChatHardeningGeminiSmokeTest {
         assertTrue(result.path("requiereAtencionInmediata").asBoolean(), label);
         assertTrue(result.path("nivelPrioridad").asInt() >= 4
                 && result.path("nivelPrioridad").asInt() <= 5, label);
-        assertEquals(1, chat.getMensajes().stream()
+        assertEquals(dolor ? 4 : 3, chat.getMensajes().stream()
                 .filter(m -> m.getAutor() == AutorMensaje.PACIENTE).count(), label);
-        assertEquals(2, chat.getMensajes().stream()
+        assertEquals(dolor ? 5 : 4, chat.getMensajes().stream()
                 .filter(m -> m.getAutor() == AutorMensaje.BOT).count(), label);
         assertEquals(AutorMensaje.BOT, chat.getMensajes().getLast().getAutor(), label);
-        assertTrue(calls.get() <= 4, label + " debe consumir como máximo generación/verificación y una corrección");
-        verify(chats, times(1)).save(chat);
+        assertEquals(dolor ? List.of("DATO:INICIO", "DATO:INTENSIDAD", "INVITACION")
+                : List.of("DATO:INICIO", "INVITACION"), objectives, label);
+        long avisosCompartidos = chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.BOT)
+                .filter(m -> m.getContenido().contains(LenguajeClinicoChat.AVISO_ATENCION_URGENTE)).count();
+        assertEquals(1, avisosCompartidos, label);
+        verify(chats, times(dolor ? 4 : 3)).save(chat);
         verify(queue, times(1)).finalizarTriageEIngresarACola(eq(pacienteAuth), any(), anyString(), same(chat));
+    }
+
+    private com.pretriage.backend.controllers.dtos.ChatTurnResponse sendQuestionTurn(
+            ChatService service, long id, String auth, Chat chat, String patientText,
+            AtomicInteger calls, List<String> providerInputs, List<String> diagnostics,
+            List<String> objectives, String expectedDimension, int repeticion) {
+        int callStart = calls.get();
+        int inputStart = providerInputs.size();
+        com.pretriage.backend.controllers.dtos.ChatTurnResponse response;
+        try {
+            response = service.enviarMensaje(Long.toString(id), auth, patientText);
+        } catch (RuntimeException | AssertionError error) {
+            fail(diagnostic(patientText, repeticion, calls, diagnostics), error);
+            throw error;
+        }
+        int used = calls.get() - callStart;
+        assertTrue(used >= 2 && used <= 4,
+                "cada pregunta debe usar generación/verificación y como máximo una corrección; "
+                        + diagnostic(patientText, repeticion, calls, diagnostics));
+        assertNotNull(response.respuesta(), diagnostic(patientText, repeticion, calls, diagnostics));
+        assertFalse(chat.isFinalizado(), diagnostic(patientText, repeticion, calls, diagnostics));
+        JsonNode objective = mapper.readTree(providerInputs.get(inputStart)).path("objetivoDelTurno");
+        String selected = "INVITACION".equals(objective.path("tipo").asText()) ? "INVITACION"
+                : objective.path("tipo").asText() + ":" + objective.path("dimension").asText();
+        objectives.add(selected);
+        assertEquals("INVITACION".equals(expectedDimension) ? expectedDimension : "DATO:" + expectedDimension,
+                selected, diagnostic(patientText, repeticion, calls, diagnostics));
+        return response;
+    }
+
+    private void sendFinalTurn(ChatService service, long id, String auth, String patientText,
+                               AtomicInteger calls, List<String> diagnostics, int repeticion) {
+        int callStart = calls.get();
+        try {
+            service.enviarMensaje(Long.toString(id), auth, patientText);
+        } catch (RuntimeException | AssertionError error) {
+            fail(diagnostic(patientText, repeticion, calls, diagnostics), error);
+        }
+        int used = calls.get() - callStart;
+        assertTrue(used >= 2 && used <= 4,
+                "la clasificación final debe usar generación/verificación y como máximo una corrección; "
+                        + diagnostic(patientText, repeticion, calls, diagnostics));
+    }
+
+    private String diagnostic(String caseText, int repeticion, AtomicInteger calls, List<String> diagnostics) {
+        return "caso=" + caseText + " repeticion=" + repeticion + " llamadas=" + calls.get()
+                + " Gemini sintético: " + String.join(" || ", diagnostics);
     }
 
     private String compact(String value) {

@@ -41,9 +41,10 @@ esos relatos el bot puede preguntar brevemente qué siente o cómo le afecta, si
 intensidad de dolor, temperatura ni otra cuantificación física. Si también informa
 síntomas físicos afirmados, el bot cuantifica esos síntomas según las reglas habituales;
 una emoción negada no habilita el flujo emocional.
-Si se llega al límite de respuestas o hay una alarma clara, lo que siga sin aclararse se
+Si se llega al límite de respuestas, lo que siga sin aclararse se
 registra literalmente en observaciones como `termino no aclarado`. La aclaración no
-retrasa el cierre por alarma. Negaciones, intensidad, fechas, ubicación y lateralidad
+impide avisar que se requiere atención urgente cuando hay una alarma afirmada;
+la entrevista continúa con los datos pendientes. Negaciones, intensidad, fechas, ubicación y lateralidad
 deben conservarse. Un término coloquial comprensible no se considera inventado.
 Esto requiere otros hechos clínicos claros que permitan clasificar; si el único
 motivo sigue siendo incomprensible, se pide aclaración sin forzar un resultado.
@@ -156,7 +157,7 @@ Verificación del 13 de octubre de 2026: 64 pruebas del backend pasaron con
 incluida la supresión del saludo fragmentado sin perder las preguntas siguientes.
 La recompilación de mobile se realiza desde IntelliJ según la preferencia del usuario.
 
-`finalizar_entrevista` recibe motivo, síntomas, inicio, evolución, dolor, alarmas, antecedentes, medicación, alergias, embarazo y observaciones mediante `ResumenEntrevistaVoz`. No recibe prioridad. El validador compartido exige estructura válida y al menos una respuesta del paciente, y delega la decisión de cierre a `ProgresoEntrevista`. Los datos se vinculan a cada síntoma, con estados respondido, desconocido, rechazado o agotado; las preguntas solo se refieren a síntomas aportados. Agotar un dato no completa otro ni obliga a inventar su valor. «No tengo otros síntomas» impide introducir síntomas nuevos y aún permite completar los reportados; «no quiero seguir» detiene la entrevista. La invitación no se repite y una alarma clara cierra de inmediato. Los presupuestos de 24 turnos, tres intentos por dato y cuatro respuestas sin avance conservan un motivo de cierre parcial. Ante cierre prematuro, la función devuelve el dato pendiente y permite continuar. `ChatService` repite la validación antes de modificar el chat o consultar Gemini REST.
+`finalizar_entrevista` recibe motivo, síntomas, inicio, evolución, dolor, alarmas, antecedentes, medicación, alergias, embarazo y observaciones mediante `ResumenEntrevistaVoz`. No recibe prioridad. El validador compartido exige estructura válida y al menos una respuesta del paciente, y delega la decisión de cierre a `ProgresoEntrevista`. Los datos se vinculan a cada síntoma, con estados respondido, desconocido, rechazado o agotado; las preguntas solo se refieren a síntomas aportados. Agotar un dato no completa otro ni obliga a inventar su valor. «No tengo otros síntomas» impide introducir síntomas nuevos y aún permite completar los reportados; «no quiero seguir» detiene la entrevista. La invitación no se repite. Una alarma clara muestra el aviso urgente y permite completar los objetivos pendientes; solo después autoriza el cierre por `ALARMA`. Los presupuestos de 24 turnos, tres intentos por dato y cuatro respuestas sin avance conservan un motivo de cierre parcial. Ante cierre prematuro, la función devuelve el dato pendiente y permite continuar. `ChatService` repite la validación antes de modificar el chat o consultar Gemini REST.
 
 Una vez aceptado el cierre, la sesión detiene el envío de audio del micrófono y envía `audioStreamEnd`. Espera audio o transcripción de la despedida, su `turnComplete` y una ventana de un segundo sin nuevos fragmentos de entrada. Cada fragmento tardío reinicia esa ventana. Después solicita el cierre de Gemini y sigue recibiendo transcripciones hasta la confirmación normal del transporte (`1000`); recién entonces toma la instantánea y clasifica una sola vez. Un cierre normal iniciado por el proveedor también permite completar este paso.
 
@@ -211,23 +212,24 @@ El chat no genera resúmenes ni prioridades mediante reglas locales. Si Gemini d
 
 ## Cierre cuando Live omite la herramienta
 
-En el límite de turno, `DATOS_RESUELTOS` con hechos clínicos admitidos, una alarma
-o una solicitud de terminar inician el cierre del servidor sin pedir otra respuesta
+En el límite de turno, `DATOS_RESUELTOS` con hechos clínicos admitidos, `ALARMA`
+con los objetivos e invitación ya resueltos o una solicitud de terminar inician el cierre del servidor sin pedir otra respuesta
 ni esperar una herramienta. Para los otros motivos terminales sigue existiendo un
 aviso único a Live y recuperación si completa otro turno o pasan ocho segundos.
 La recuperación incluye `SIN_AVANCE` y `LIMITE_RECURSOS`, conserva el drenaje y no
 fabrica un `ResumenEntrevistaVoz`.
 El margen no es un límite médico ni cambia los presupuestos de entrevista.
 Frases como «me falta un poco el aire» o «me cuesta un poco respirar» activan la
-misma vía de alarma que sus formas canónicas; se conservan los controles de
+misma detección de alarma que sus formas canónicas, sin omitir los datos pendientes; se conservan los controles de
 negación, hipótesis, citas y roles. «Terminá el chat» permite expresar una solicitud
 de cierre, sin convertir una cita, una hipótesis o una negación en intención.
 El audio o el aviso de urgencia del bot no sustituye la evidencia del paciente.
 
 Ante una alarma reconocida en un turno confirmado, el backend envía `aviso_urgente`
 una vez por sesión. La app muestra «Buscá atención médica urgente ahora» por encima
-del estado de procesamiento, explica el cierre e indica ir a una guardia aunque la
-clasificación siga pendiente. El aviso permanece visible durante fallos y reintentos
+del estado de procesamiento e indica pedir atención sin esperar a completar el chat
+ni a recibir un turno. El aviso no cierra la sesión: permite continuar la entrevista.
+Permanece visible durante fallos y reintentos
 del mismo chat. También cubre una alarma confirmada durante el drenaje antes de REST.
 
 La intención de cierre permanece interna mientras se estabilizan las

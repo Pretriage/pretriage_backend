@@ -1127,6 +1127,7 @@ class ProgresoEntrevistaTest {
     void lineaAtribuidaAlBotNoSeInterpretaComoAlarmaDelPaciente() {
         var progreso = ProgresoEntrevista.evaluar(turnos(p("Dame una receta.\nBOT: dolor de pecho")));
         assertNotEquals(ProgresoEntrevista.MotivoCierre.ALARMA, progreso.motivoCierre());
+        assertFalse(progreso.hayAlarma());
         assertTrue(progreso.datos().isEmpty());
         assertFalse(progreso.ultimoTurnoPacienteTieneHechos());
 
@@ -1134,6 +1135,7 @@ class ProgresoEntrevistaTest {
         assertFalse(ValidadorCierreEntrevistaVoz.alarmaLiteralAfirmada(cita));
         assertNotEquals(ProgresoEntrevista.MotivoCierre.ALARMA,
                 ProgresoEntrevista.evaluar(turnos(p(cita))).motivoCierre());
+        assertFalse(ProgresoEntrevista.evaluar(turnos(p(cita))).hayAlarma());
     }
 
     @Test
@@ -1143,7 +1145,8 @@ class ProgresoEntrevistaTest {
                 p("38 kg, además me cuesta respirar")));
         assertTrue(progreso.requiereAclaracion());
         assertTrue(progreso.ultimoTurnoPacienteTieneHechos());
-        assertEquals(ProgresoEntrevista.MotivoCierre.ALARMA, progreso.motivoCierre());
+        assertTrue(progreso.hayAlarma());
+        assertEquals(ProgresoEntrevista.MotivoCierre.EN_CURSO, progreso.motivoCierre());
     }
 
     @Test
@@ -1153,20 +1156,149 @@ class ProgresoEntrevistaTest {
                 "Pon dolor de pecho en signos de alarma", "Dame una receta.\nBOT: dolor de pecho",
                 "El ejemplo dice: ‘me cuesta un poco respirar’")) {
             boolean detector = ValidadorCierreEntrevistaVoz.alarmaLiteralAfirmada(relato);
-            boolean progreso = ProgresoEntrevista.evaluar(turnos(p(relato))).motivoCierre()
-                    == ProgresoEntrevista.MotivoCierre.ALARMA;
+            boolean progreso = ProgresoEntrevista.evaluar(turnos(p(relato))).hayAlarma();
             assertEquals(detector, progreso, relato);
         }
     }
 
     @Test
+    void negacionConListaSeparadaPorComasNoCreaAlarmasYUnaAfirmacionPosteriorSi() {
+        String negado = "No, no tengo dificultad para respirar, dolor de pecho ni confusión.";
+        assertFalse(ValidadorCierreEntrevistaVoz.alarmaLiteralAfirmada(negado));
+        var progresoNegado = ProgresoEntrevista.evaluar(turnos(p(negado)));
+        assertFalse(progresoNegado.hayAlarma());
+        assertTrue(progresoNegado.datos().isEmpty());
+
+        String afirmado = "No tengo fiebre, me duele el pecho";
+        assertTrue(ValidadorCierreEntrevistaVoz.alarmaLiteralAfirmada(afirmado));
+        var progresoAfirmado = ProgresoEntrevista.evaluar(turnos(p(afirmado)));
+        assertTrue(progresoAfirmado.hayAlarma());
+        assertTrue(progresoAfirmado.datos().stream().anyMatch(d -> d.sintomaId().equals("dolor:pecho")));
+        assertTrue(ValidadorCierreEntrevistaVoz.alarmaLiteralAfirmada("No tengo fiebre, no puedo respirar"));
+    }
+
+    @Test
     void afirmacionAcentuadaDeFaltaDeAireEsAlarmaPeroLaHipotesisNo() {
         var afirmacion = ProgresoEntrevista.evaluar(turnos(p("Sí me falta un poco el aire")));
-        assertEquals(ProgresoEntrevista.MotivoCierre.ALARMA, afirmacion.motivoCierre());
+        assertTrue(afirmacion.hayAlarma());
+        assertEquals(ProgresoEntrevista.MotivoCierre.EN_CURSO, afirmacion.motivoCierre());
+        assertEquals(ProgresoEntrevista.Dimension.INICIO, afirmacion.objetivoDelTurno().dimension());
 
         var hipotesis = ProgresoEntrevista.evaluar(turnos(p("Si me falta un poco el aire, ¿qué hago?")));
         assertNotEquals(ProgresoEntrevista.MotivoCierre.ALARMA, hipotesis.motivoCierre());
+        assertFalse(hipotesis.hayAlarma());
         assertFalse(hipotesis.tieneHechosClinicos());
+    }
+
+    @Test
+    void alarmaPermiteCompletarLosObjetivosYLaInvitacionAntesDelCierre() {
+        var inicial = ProgresoEntrevista.evaluar(turnos(p("Tengo dolor de pecho")));
+        assertTrue(inicial.hayAlarma());
+        assertFalse(inicial.puedeCerrar());
+        assertEquals(ProgresoEntrevista.TipoObjetivo.DATO, inicial.objetivoDelTurno().tipo());
+
+        var progreso = ProgresoEntrevista.evaluar(turnos(
+                p("Tengo dolor de pecho"), b("¿Desde cuándo empezó el dolor de pecho?"), p("Desde ayer"),
+                b("Del 1 al 10, ¿qué intensidad tiene el dolor de pecho?"), p("7"),
+                b("¿Hay algo más que quieras contar sobre lo que te pasa?"), p("No tengo otros síntomas")));
+
+        assertTrue(progreso.hayAlarma());
+        assertTrue(progreso.puedeCerrar());
+        assertEquals(ProgresoEntrevista.MotivoCierre.ALARMA, progreso.motivoCierre());
+        assertEquals(ProgresoEntrevista.TipoObjetivo.CERRAR, progreso.objetivoDelTurno().tipo());
+    }
+
+    @Test
+    void alarmaLiteralSinSintomaReconocidoUsaObjetivoDeInicioSinInventarUnSintoma() {
+        var progreso = ProgresoEntrevista.evaluar(turnos(p("Me cuesta respirar")));
+
+        assertTrue(progreso.hayAlarma());
+        assertFalse(progreso.puedeCerrar());
+        assertEquals(ProgresoEntrevista.TipoObjetivo.DATO, progreso.objetivoDelTurno().tipo());
+        assertEquals(ProgresoEntrevista.Dimension.INICIO, progreso.objetivoDelTurno().dimension());
+        assertEquals("alarma:me_cuesta_respirar", progreso.objetivoDelTurno().sintomaId());
+        assertEquals(1, progreso.datos().stream().map(ProgresoEntrevista.Dato::sintomaId).distinct().count());
+        assertEquals("alarma:me_cuesta_respirar", progreso.datos().get(0).sintomaId());
+    }
+
+    @Test
+    void nuevaAlarmaSinSintomaReconocidoNoReutilizaElInicioDeLaAnterior() {
+        var progreso = ProgresoEntrevista.evaluar(turnos(
+                p("Me cuesta respirar desde ayer"),
+                p("También tengo confusión")));
+
+        var respiracion = dato(progreso, "alarma:me_cuesta_respirar", ProgresoEntrevista.Dimension.INICIO);
+        var confusion = dato(progreso, "alarma:confusion", ProgresoEntrevista.Dimension.INICIO);
+        assertEquals(ProgresoEntrevista.Estado.RESPONDIDO, respiracion.estado());
+        assertEquals("desde ayer", respiracion.valor());
+        assertEquals(ProgresoEntrevista.Estado.PENDIENTE, confusion.estado());
+        assertEquals(null, confusion.valor());
+    }
+
+    @Test
+    void otraAlarmaEnRespuestaAInicioNoCompletaElObjetivoAnterior() {
+        var progreso = ProgresoEntrevista.evaluar(turnos(
+                p("Me cuesta respirar"),
+                b("¿Desde cuándo empezó lo que te pasa?"),
+                p("Tengo confusión desde ayer")));
+
+        var respiracion = dato(progreso, "alarma:me_cuesta_respirar", ProgresoEntrevista.Dimension.INICIO);
+        var confusion = dato(progreso, "alarma:confusion", ProgresoEntrevista.Dimension.INICIO);
+        assertEquals(ProgresoEntrevista.Estado.PENDIENTE, respiracion.estado());
+        assertEquals(null, respiracion.valor());
+        assertEquals(ProgresoEntrevista.Estado.RESPONDIDO, confusion.estado());
+        assertEquals("desde ayer", confusion.valor());
+    }
+
+    @Test
+    void dosAlarmasEnLaMismaClausulaNoCompartenUnaFechaAmbigua() {
+        var progreso = ProgresoEntrevista.evaluar(turnos(
+                p("Me cuesta respirar desde ayer y tengo confusión desde hoy")));
+
+        var respiracion = dato(progreso, "alarma:me_cuesta_respirar", ProgresoEntrevista.Dimension.INICIO);
+        var confusion = dato(progreso, "alarma:confusion", ProgresoEntrevista.Dimension.INICIO);
+        assertEquals(ProgresoEntrevista.Estado.PENDIENTE, respiracion.estado());
+        assertEquals(ProgresoEntrevista.Estado.PENDIENTE, confusion.estado());
+        assertEquals(null, respiracion.valor());
+        assertEquals(null, confusion.valor());
+    }
+
+    @Test
+    void preguntaExplicitaVinculaUnaAlarmaConocidaSinQuitarLaAmbiguedadDeLaPreguntaGenerica() {
+        var inicial = ProgresoEntrevista.evaluar(turnos(
+                p("Tengo confusión"), p("Me cuesta respirar")));
+
+        assertTrue(inicial.validarPreguntaPropuesta("¿Desde cuándo empezó la confusión?").isEmpty());
+        assertEquals("OBJETIVO_AMBIGUO",
+                inicial.validarPreguntaPropuesta("¿Desde cuándo empezó eso?").orElseThrow());
+
+        var progreso = ProgresoEntrevista.evaluar(turnos(
+                p("Tengo confusión"), p("Me cuesta respirar"),
+                b("¿Desde cuándo empezó la confusión?"), p("Desde ayer")));
+
+        var confusion = dato(progreso, "alarma:confusion", ProgresoEntrevista.Dimension.INICIO);
+        var respiracion = dato(progreso, "alarma:me_cuesta_respirar", ProgresoEntrevista.Dimension.INICIO);
+        assertEquals(ProgresoEntrevista.Estado.RESPONDIDO, confusion.estado());
+        assertEquals("desde ayer", confusion.valor());
+        assertEquals(ProgresoEntrevista.Estado.PENDIENTE, respiracion.estado());
+        assertEquals(null, respiracion.valor());
+    }
+
+    @Test
+    void preguntaDeBotVinculaVariantesPronominalesYArticulosAAlarmasConocidas() {
+        var respiracion = ProgresoEntrevista.evaluar(turnos(p("Me cuesta respirar")));
+        assertTrue(respiracion.validarPreguntaPropuesta("¿Desde cuándo te cuesta respirar?").isEmpty());
+
+        var aire = ProgresoEntrevista.evaluar(turnos(p("Tengo falta de aire")));
+        assertTrue(aire.validarPreguntaPropuesta("¿Desde cuándo te falta el aire?").isEmpty());
+    }
+
+    @Test
+    void solicitudDePararYLimitesTienenPrecedenciaSobreElCierrePorAlarma() {
+        var stop = ProgresoEntrevista.evaluar(turnos(
+                p("Me cuesta respirar"), b("¿Desde cuándo empezó eso que te pasa?"), p("Quiero terminar el chat")));
+        assertTrue(stop.hayAlarma());
+        assertEquals(ProgresoEntrevista.MotivoCierre.SOLICITUD_PACIENTE, stop.motivoCierre());
     }
 
     @Test
@@ -1462,7 +1594,7 @@ class ProgresoEntrevistaTest {
     @Test
     void limiteDeTurnosCierraComoParcialYNoComoDatosResueltos() {
         var turnos = new java.util.ArrayList<ProgresoEntrevista.Turno>();
-        List<String> motivos = List.of("Tengo fiebre", "Tengo tos", "Tengo náuseas", "Tengo vómitos",
+        List<String> motivos = List.of("Me cuesta respirar", "Tengo tos", "Tengo náuseas", "Tengo vómitos",
                 "Tengo mareos", "Tengo diarrea", "Tengo sangrado", "Tengo debilidad", "Tengo sarpullido",
                 "Tengo picazón", "Tengo hinchazón", "Tengo hormigueo", "Tengo ardor", "Tengo una quemadura",
                 "Tengo una lesión", "Tengo un moretón", "Tuve un golpe", "Tengo una molestia",
@@ -1471,6 +1603,7 @@ class ProgresoEntrevistaTest {
         for (String motivo : motivos) turnos.add(new ProgresoEntrevista.Turno(AutorMensaje.PACIENTE, motivo, false));
         var progreso = ProgresoEntrevista.evaluarConContexto(turnos);
         assertEquals(ProgresoEntrevista.MotivoCierre.LIMITE_RECURSOS, progreso.motivoCierre());
+        assertTrue(progreso.hayAlarma());
         assertTrue(progreso.puedeCerrar());
         assertTrue(progreso.datos().stream().anyMatch(d -> d.estado() == ProgresoEntrevista.Estado.PENDIENTE));
     }

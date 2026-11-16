@@ -57,8 +57,10 @@ Después de resolver los datos, se ofrece la invitación una vez si
 todavía no se hizo ni el paciente dijo que no tenía más síntomas. Si responde que no
 a esa invitación, la entrevista se cierra con los datos disponibles; no se agregan
 preguntas no solicitadas sobre antecedentes, medicamentos o alergias. Un
-signo de alarma claro cierra la entrevista de inmediato para la clasificación urgente
-y la validación de prioridad existentes. Los límites son resguardos de recursos,
+signo de alarma claro muestra un aviso de atención urgente y permite completar los
+datos pendientes del triage. El aviso indica que no se debe esperar al chat para
+pedir ayuda. La clasificación final conserva la validación de prioridad urgente.
+Los límites son resguardos de recursos,
 no una cantidad mínima ni una prueba de suficiencia clínica. Los cierres por límite
 o estancamiento conservan los datos desconocidos y el motivo de cierre parcial.
 
@@ -107,8 +109,9 @@ un síntoma, una causa o un origen físico o emocional.
 - El validador permite cerrar relatos emocionales tras una invitación abierta y su
   respuesta, sin forzar cuantificación física; el preflight semántico conserva la
   validación de alcance antes de aceptar el cierre.
-- Las alarmas cierran inmediatamente; el resto de los cierres usa objetivos resueltos
-  e invitación única, o un motivo explícito de agotamiento o falta de avance.
+- Las alarmas no omiten los objetivos pendientes ni la invitación única. El cierre
+  usa datos resueltos, solicitud del paciente o los límites de recursos existentes;
+  el aviso urgente se muestra desde el primer turno de alarma afirmada.
 - La clasificación final conserva los datos desconocidos como no informados y aplica
   las validaciones compartidas de estructura y alarmas.
 
