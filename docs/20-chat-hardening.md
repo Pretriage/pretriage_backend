@@ -184,11 +184,48 @@ no permite recuperar un síntoma expresado solo por el bot o en texto excluido.
 Una relación o un malestar emocional directamente expresados sí pueden aportar
 hechos propios, sin añadir una manifestación física.
 
+Generación, corrección y verificación final comparten
+`LenguajeClinicoChat.REGLAS_EQUIVALENCIA_CLINICA`, una regla general para todo
+síntoma o hecho de salud; no se usa una lista cerrada de equivalencias. Una
+etiqueta normalizada conserva el significado y no añade especificidad. Por ejemplo,
+«dolor de pecho» respalda «dolor torácico», y «me duele la cabeza» respalda «cefalea».
+La cita sigue siendo literal; la etiqueta no tiene que aparecer con las mismas
+palabras. El mismo hecho puede integrar
+síntomas y signos de alarma, y sustentar prioridad y aviso urgente sin que el
+paciente use términos técnicos. Esto no admite diagnósticos, datos ausentes,
+negaciones convertidas en positivos ni equiparar «vacío en el pecho» con dolor.
+La variante «moratón» y su forma argentina «moretón» se comparten también con el
+verificador. Este acepta la confirmación de registro y el aviso breve de atención
+urgente respaldado, sin confundir ese aviso con revelar el nivel de prioridad.
+Las pruebas opt-in `verificadorRealAceptaNormalizacionConEvidenciaLiteral`,
+`verificadorRealRechazaDolorToracicoSinAfirmacionDeDolor` y
+`verificadorRealRechazaHechosNuevosAunqueLaCitaSeaLiteral` cubren varios tipos de
+síntomas y prioridades, negación, incertidumbre, lateralidad, intensidad y
+diagnósticos no informados, con propuestas sintéticas fijas y verificación real.
+Las prioridades de esas propuestas ejercitan el contrato de validación; los
+ejemplos no constituyen una evaluación de precisión clínica del clasificador.
+El 14/11/2026 pasaron 103 pruebas enfocadas sin fallos ni omisiones, incluidas
+24 verificaciones sintéticas con Gemini real y `GEMINI_CHAT_MODEL=gemini-3.5-flash-lite`.
+Las propuestas cubrieron las cinco prioridades, varias regiones y síntomas
+respiratorios, digestivos, urinarios, cutáneos y emocionales; mantuvieron el rechazo
+de hechos no respaldados y de la omisión de un inicio efectivamente informado.
+La reproducción sintética con generación y verificación reales pasó tras alinear
+las instrucciones. Esa comprobación no modifica conversaciones guardadas ni
+despliega la corrección.
+
+Ante un rechazo `INFERENCIA`, la corrección vuelve a las palabras afirmadas por
+el paciente si la normalización es dudosa, sin añadir especificidad. Conserva una
+alarma respaldada, su evidencia y la atención inmediata correspondiente; no la
+elimina ni reduce su prioridad para conseguir la aprobación del verificador.
+
 La comprobación también exige conservar un inicio relativo explícito: desconocer
 la fecha exacta no elimina una cláusula afirmada como «desde que…». No se inventa
 una fecha ni se transforma la referencia en una duración. Si hay inicios distintos,
 se conserva su asociación con cada síntoma en observaciones. La evolución sigue
-sin informar si el paciente no describió un cambio.
+sin informar si el paciente no describió un cambio. El tiempo verbal por sí solo
+no informa cuándo comenzó ni cómo evolucionó un síntoma: un relato en pasado
+admite `inicio="no informado"` sin que eso constituya `OMISION_INICIO`, mientras
+no haya una referencia temporal explícita o contextual afirmada que conservar.
 
 La respuesta de verificación requiere `valido` y admite el código opcional acotado
 `SIN_RESPALDO`, `NEGACION`, `INFERENCIA`, `COMUNICACION` o `INTENSIDAD_NO_DOLOR`.
@@ -262,6 +299,13 @@ python -B scripts/test_backend_isolated.py
 `ChatHardeningTest` verifica estados, historial, exclusión clínica y efectos en cola.
 `HardeningIaClientTest` verifica contrato, citas y decisión del verificador.
 Las pruebas de voz cubren cierres rechazados, continuación y transcripciones tardías.
+`ClasificacionSemanticaDurableTest` corre por medio del ejecutor aislado contra
+PostgreSQL descartable. Su regresión inyecta una clasificación de alarma con cita
+literal, simula el primer rechazo del verificador con `INFERENCIA` y acepta la
+corrección; comprueba la clasificación completa persistida, la evidencia de alarma,
+la prioridad alta y que se actualiza una sola entrada de cola existente. También
+comprueba la idempotencia al repetir la solicitud. El generador/verificador es
+determinista en esta prueba; Gemini no es el proveedor real.
 
 La evaluación opcional `ChatHardeningGeminiSmokeTest` usa Gemini real con entradas
 sintéticas. No levanta Spring ni accede a repositorios o bases. Requiere
@@ -271,6 +315,26 @@ Consume solicitudes del proveedor. Se encuentra desactivada en la suite habitual
 ```powershell
 ./mvnw.cmd "-Dtest=ChatHardeningGeminiSmokeTest" "-Dpretriage.gemini.hardening.live=true" "-Dspring.docker.compose.enabled=false" test
 ```
+
+La matriz de generación y verificación real incluye nueve ejecuciones nuevas:
+tres por cada relato afirmado exacto, `Tengo dolor de pecho`, `Me falta el aire`
+y `Tengo un sangrado abundante`. Comprueba resultado final, síntomas, signos de
+alarma, prioridad 4 o 5 y atención inmediata, sin exigir que la etiqueta clínica
+repita literalmente el relato. Los controles con propuestas fijas y verificación
+real rechazan elevar un manchado leve a sangrado abundante, convertir una negación
+en alarma o tomar como hecho un síntoma mencionado solo por el bot. También se
+comprueban sangrado nasal sin alarma, sangrado abundante con alarma y sangrado leve
+sin alarma. Una pregunta hipotética de sangrado sin síntomas afirmados espera una
+respuesta no final con resultado nulo. Estas pruebas describen los casos ejercitados;
+no registran por sí solas un resultado de ejecución.
+
+El 15/11/2026 la suite completa aislada pasó 877 pruebas automáticas, con 26
+métodos opt-in omitidos y sin errores. La evaluación enfocada con el modelo
+efectivo de producción `gemini-3.5-flash-lite` pasó 31 casos sin omisiones; incluye
+nueve conversaciones independientes (tres por alarma) por `ChatService` real con
+generación, verificación y la corrección acotada existente. La prueba durable usa
+proveedor simulado y verifica la misma prioridad en resultado, consulta y cola,
+sin duplicados al repetir el UUID. La comprobación con Gemini no usa una base.
 
 Para evaluar solo el verificador de preguntas, los dos métodos `verificadorReal*`
 usan propuestas fijas y delegan únicamente su verificación a Gemini real: una

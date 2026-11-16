@@ -451,6 +451,43 @@ class ChatAutomaticRetryTest {
     }
 
     @Test
+    void inferenciaEnResultadoSeCorrigeYClasificaUnaSolaVez() throws Exception {
+        var result = new TriageAiResponse(true, "Busca atención médica urgente.", new TriageResultDTO(
+                "sangrado abundante", List.of("sangrado abundante"), "hace tres horas", "tres episodios", null,
+                List.of("sangrado abundante"), List.of(), List.of(), List.of(), "no informado", "",
+                4, true, "Busca atención médica urgente."));
+        var first = mapper.valueToTree(result);
+        var corrected = mapper.valueToTree(result);
+        var evidence = mapper.valueToTree(List.of(
+                Map.of("campo", "sintomas", "valor", "sangrado abundante", "cita",
+                        "Tengo sangrado abundante desde hace tres horas y ya me pasó tres veces"),
+                Map.of("campo", "signosAlarma", "valor", "sangrado abundante", "cita",
+                        "Tengo sangrado abundante desde hace tres horas y ya me pasó tres veces")));
+        ((tools.jackson.databind.node.ObjectNode) first).set("evidenciaClinica", evidence);
+        ((tools.jackson.databind.node.ObjectNode) corrected).set("evidenciaClinica", evidence);
+        var generatedResponse = response(200, envelope(mapper.writeValueAsString(first)));
+        var rejectedResponse = response(200, envelope("{\"valido\":false,\"motivo\":\"INFERENCIA\"}"));
+        var correctedResponse = response(200, envelope(mapper.writeValueAsString(corrected)));
+        var acceptedResponse = response(200, envelope("{\"valido\":true}"));
+        when(http.<String>send(any(), any())).thenReturn(generatedResponse, rejectedResponse,
+                correctedResponse, acceptedResponse);
+
+        service().enviarMensaje("7", "patient",
+                "Tengo sangrado abundante desde hace tres horas y ya me pasó tres veces");
+
+        assertTrue(chat.isFinalizado());
+        assertEquals(EstadoClasificacionChat.COMPLETADA, chat.getEstadoClasificacion());
+        assertNotNull(chat.getResultadoTriageJson());
+        assertTrue(chat.getResultadoTriageJson().contains("sangrado abundante"));
+        assertTrue(chat.getResultadoTriageJson().contains("\"nivelPrioridad\":4"));
+        assertEquals(1, chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.PACIENTE).count());
+        assertEquals(1, chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.BOT).count());
+        verify(http, times(4)).send(any(), any());
+        verify(chats, times(1)).save(chat);
+        verify(queue, times(1)).finalizarTriageEIngresarACola(eq("patient"), any(), anyString(), same(chat));
+    }
+
+    @Test
     void timeoutRecuperadoClasificaUnaSolaVezSinRepetirMensajeNiIngresoEnCola() throws Exception {
         var result = new TriageAiResponse(true, "Busca atención urgente.", new TriageResultDTO(
                 "dolor de pecho", List.of("dolor de pecho"), "no informado", "no informado", null,
