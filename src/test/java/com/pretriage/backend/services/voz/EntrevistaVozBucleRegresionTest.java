@@ -40,7 +40,7 @@ class EntrevistaVozBucleRegresionTest {
                 bot("¿Te tomaste la temperatura?"),
                 paciente("38° y medio"),
                 bot("¿Hay algo más que quieras contar?"),
-                paciente("Me falta un poco el aire"));
+                paciente("Me falta un poco el aire desde hoy"));
 
         ProgresoEntrevista progreso = ProgresoEntrevista.evaluar(historial);
 

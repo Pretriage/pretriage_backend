@@ -43,44 +43,68 @@ class ChatClasificacionCierreTest {
         return new ResumenEntrevistaVoz("dolor de pecho", List.of("dolor de pecho"), "hoy", "igual", 8,
                 List.of("dolor toracico"), List.of(), List.of(), List.of(), "no informado", "sin otros datos");
     }
+    private void prepararDolorPechoResuelto() {
+        chat.setFinalizado(false);
+        chat.setCierreParcial(false);
+        chat.setEstadoClasificacion(EstadoClasificacionChat.NO_SOLICITADA);
+        chat.setResultadoTriageJson(null);
+        chat.getMensajes().clear();
+        for (var turno : List.of(
+                new TurnoVoz(AutorMensaje.BOT, "¿Cuál es el motivo de consulta?"),
+                new TurnoVoz(AutorMensaje.PACIENTE, "Tengo dolor de pecho"),
+                new TurnoVoz(AutorMensaje.BOT, "¿Desde cuándo empezó el dolor de pecho?"),
+                new TurnoVoz(AutorMensaje.PACIENTE, "Desde hoy"),
+                new TurnoVoz(AutorMensaje.BOT, "¿Cuánto te duele del 1 al 10?"),
+                new TurnoVoz(AutorMensaje.PACIENTE, "8/10"),
+                new TurnoVoz(AutorMensaje.BOT, "¿Tenés alergias o tomás alguna medicación?"),
+                new TurnoVoz(AutorMensaje.PACIENTE, "No tengo alergias ni tomo medicación."),
+                new TurnoVoz(AutorMensaje.BOT, "¿Hay algo más que quieras contar sobre lo que te pasa?"))) {
+            chat.agregarMensaje(new Mensaje(turno.contenido(), turno.autor(),
+                    turno.autor() == AutorMensaje.PACIENTE ? chat.getPaciente() : null));
+        }
+    }
     @Test void textoYVozCorrigenLaMismaIncoherenciaSinCambiarPrioridadLocalmente() {
         for (boolean voice : List.of(false, true)) {
             reset(ia, cola);
             simularConsultaConPresupuesto();
-            chat.setFinalizado(false); chat.getMensajes().clear();
+            prepararDolorPechoResuelto();
             when(ia.consultar(anyString(), anyString(), eq(true))).thenReturn(result(2, false, List.of("dolor toracico"), List.of()));
             when(ia.consultarCorreccionFinal(anyString(), anyString(), any())).thenReturn(result(4, true, List.of("dolor toracico"), List.of()));
-            if (voice) service.finalizarEntrevistaVoz("1", "patient", List.of(new TurnoVoz(AutorMensaje.PACIENTE, "Tengo dolor de pecho")), summary());
-            else service.enviarMensaje("1", "patient", "Tengo dolor de pecho");
+            if (voice) service.finalizarEntrevistaVoz("1", "patient",
+                    List.of(new TurnoVoz(AutorMensaje.PACIENTE, "No, nada más.")), summary());
+            else service.enviarMensaje("1", "patient", "No, nada más.");
             assertTrue(chat.isFinalizado());
             assertEquals(EstadoClasificacionChat.COMPLETADA, chat.getEstadoClasificacion());
-            assertEquals(2, chat.getMensajes().size());
+            assertEquals(5, chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.PACIENTE).count());
+            assertEquals(6, chat.getMensajes().stream().filter(m -> m.getAutor() == AutorMensaje.BOT).count());
             verify(ia, times(1)).consultarCorreccionFinal(contains("alarma"), anyString(),
                     argThat(plazo -> !plazo.isNegative() && plazo.toSeconds() <= 45));
             verify(cola, times(1)).finalizarTriageEIngresarACola(eq("patient"), any(), anyString(), same(chat));
         }
     }
     @Test void segundoResultadoIncoherenteCierraSinClasificarNiEncolarYNoPermiteOk() {
+        prepararDolorPechoResuelto();
         var bad = result(2, false, List.of("dolor toracico"), List.of());
         when(ia.consultar(anyString(), anyString(), eq(true))).thenReturn(bad);
         when(ia.consultarCorreccionFinal(anyString(), anyString(), any())).thenReturn(bad);
-        assertDoesNotThrow(() -> service.enviarMensaje("1", "patient", "Tengo dolor de pecho"));
+        assertDoesNotThrow(() -> service.enviarMensaje("1", "patient", "No, nada más."));
         assertEquals(EstadoClasificacionChat.PENDIENTE, chat.getEstadoClasificacion());
         assertTrue(chat.isFinalizado()); assertNull(chat.getResultadoTriageJson());
-        assertEquals(1, chat.getMensajes().size());
+        assertEquals(10, chat.getMensajes().size());
         assertThrows(ChatFinalizadoException.class, () -> service.enviarMensaje("1", "patient", "ok"));
         verify(ia, times(1)).consultarCorreccionFinal(anyString(), anyString(), any());
         verifyNoInteractions(cola);
     }
 
     @Test void conservaLaRecomendacionUrgenteSiLaSancionImpideAbrirUnaEntradaLegada() {
+        prepararDolorPechoResuelto();
         when(ia.consultar(anyString(), anyString(), eq(true)))
                 .thenReturn(result(4, true, List.of("dolor toracico"), List.of()));
         when(cola.finalizarTriageEIngresarACola(eq("patient"), any(), anyString(), same(chat)))
                 .thenThrow(new PacienteSancionadoException(
                         new EstadoSancionPacienteDTO(true, true, null, null, null)));
 
-        service.enviarMensaje("1", "patient", "Tengo dolor de pecho");
+        service.enviarMensaje("1", "patient", "No, nada más.");
 
         assertEquals(EstadoClasificacionChat.COMPLETADA, chat.getEstadoClasificacion());
         String respuesta = chat.getMensajes().getLast().getContenido();
@@ -88,9 +112,10 @@ class ChatClasificacionCierreTest {
         assertTrue(respuesta.contains("recepción del hospital"));
     }
     @Test void ningunaNoSePersisteComoAlergiaYSePideCorreccion() {
+        prepararDolorPechoResuelto();
         when(ia.consultar(anyString(), anyString(), eq(true))).thenReturn(result(4, true, List.of("dolor toracico"), List.of("Ninguna")));
         when(ia.consultarCorreccionFinal(anyString(), anyString(), any())).thenReturn(result(4, true, List.of("dolor toracico"), List.of()));
-        service.enviarMensaje("1", "patient", "Dolor de pecho. No tengo alergias.");
+        service.enviarMensaje("1", "patient", "No, nada más.");
         assertTrue(chat.getResultadoTriageJson().contains("\"alergias\":[]"));
         verify(ia).consultarCorreccionFinal(contains("listas vacias"), anyString(), any());
     }
@@ -119,15 +144,16 @@ class ChatClasificacionCierreTest {
         verify(cola, times(1)).finalizarTriageEIngresarACola(eq("patient"), any(), anyString(), same(chat));
     }
     @Test void falloTecnicoProgramaRecuperacionAutomaticaYConservaEntrevistaCerrada() {
+        prepararDolorPechoResuelto();
         when(ia.consultar(anyString(), anyString(), eq(true))).thenThrow(new ProveedorIaException(null));
         assertDoesNotThrow(() -> service.finalizarEntrevistaVoz("1", "patient",
-                List.of(new TurnoVoz(AutorMensaje.PACIENTE, "Tengo dolor de pecho")), summary()));
+                List.of(new TurnoVoz(AutorMensaje.PACIENTE, "No, nada más.")), summary()));
         assertTrue(chat.isFinalizado()); assertEquals(EstadoClasificacionChat.PENDIENTE, chat.getEstadoClasificacion());
-        assertEquals(1, chat.getMensajes().size());
+        assertEquals(10, chat.getMensajes().size());
         assertTrue(chat.isRecuperacionAutomaticaClasificacion());
         assertNotNull(chat.getProximoReintentoEn());
-        service.registrarCierreVozFallido("1", "patient", List.of(new TurnoVoz(AutorMensaje.PACIENTE, "Tengo dolor de pecho")));
-        assertEquals(1, chat.getMensajes().size());
+        service.registrarCierreVozFallido("1", "patient", List.of(new TurnoVoz(AutorMensaje.PACIENTE, "No, nada más.")));
+        assertEquals(10, chat.getMensajes().size());
         verify(ia, never()).consultarCorreccionFinal(anyString(), anyString(), any());
         verifyNoInteractions(cola);
     }
@@ -198,6 +224,7 @@ class ChatClasificacionCierreTest {
     }
 
     @Test void esquemaInvalidoEnClasificacionFinalTambienPideUnaCorreccionConElPlazoRestante() throws Exception {
+        prepararDolorPechoResuelto();
         var mapper = new ObjectMapper();
         var raw = mock(GeminiJsonClient.class);
         var boundary = new TriageIaClient(raw, mapper);
@@ -212,7 +239,7 @@ class ChatClasificacionCierreTest {
                 .put("cita", "Tengo dolor de pecho");
         when(raw.generar(anyString(), anyString(), any(), any()))
                 .thenReturn("{}", mapper.writeValueAsString(proposed), "{\"valido\":true}");
-        flujo.enviarMensaje("1", "patient", "Tengo dolor de pecho");
+        flujo.enviarMensaje("1", "patient", "No, nada más.");
         assertEquals(EstadoClasificacionChat.COMPLETADA, chat.getEstadoClasificacion());
         verify(raw, never()).generar(anyString(), anyString(), any());
         verify(raw, times(3)).generar(anyString(), anyString(), any(), any());
@@ -303,12 +330,13 @@ class ChatClasificacionCierreTest {
     }
 
     @Test void falloDeTransporteNoSeConfundeConUnErrorDeEsquema() {
+        prepararDolorPechoResuelto();
         var raw = mock(GeminiJsonClient.class);
         var boundary = new TriageIaClient(raw, new ObjectMapper());
         var flujo = new ChatService(repo, mock(RepoPacientes.class), mock(RepoConsultasMedicas.class),
                 mock(RepoEntradasCola.class), cola, boundary, new ObjectMapper());
         when(raw.generar(anyString(), anyString(), any(), any())).thenThrow(new ProveedorIaException(new java.net.http.HttpTimeoutException("timeout")));
-        assertDoesNotThrow(() -> flujo.enviarMensaje("1", "patient", "Tengo dolor de pecho"));
+        assertDoesNotThrow(() -> flujo.enviarMensaje("1", "patient", "No, nada más."));
         assertTrue(chat.isFinalizado());
         assertEquals(EstadoClasificacionChat.PENDIENTE, chat.getEstadoClasificacion());
         verify(raw, times(1)).generar(anyString(), anyString(), any(), any());

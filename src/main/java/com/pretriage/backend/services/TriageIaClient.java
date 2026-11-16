@@ -159,6 +159,9 @@ public class TriageIaClient {
             respaldado por el relato; rechaza preguntas sobre síntomas nuevos que el paciente no mencionó.
             Distingue la pregunta de la afirmación: rechaza si la respuesta da por cierto un síntoma, dato o causa
             no expresado, pero no solo porque la pregunta neutral nombre el síntoma o dato que busca cuantificar.
+            Ante una alarma afirmada por PACIENTE, un aviso breve de pedir atencion urgente sin esperar
+            a completar el chat puede preceder la pregunta o invitacion pendiente. Ese aviso de seguridad
+            no es un cierre, diagnostico ni anuncio de prioridad; no habilita omitir el objetivo del turno.
             Una pregunta neutral sobre un síntoma afirmado y su dimensión pendiente no afirma el síntoma ni un
             valor; acepta la forma interrogativa aunque nombre ese síntoma. Antes de aprobarla, comprueba si
             esa dimensión ya quedó respondida en los turnos del paciente, incluso con una referencia temporal
@@ -190,8 +193,8 @@ public class TriageIaClient {
             tratamientos o dosis, anuncia prioridad/clasificación, se despide, cierra la entrevista o anuncia
             que registró las respuestas. Una continuación no puede anunciar el registro. Devuelve true solo si
             el mensaje es una pregunta/invitación breve y pertinente al dato pendiente o una aclaración segura
-            ante entrada ambigua/fuera de contexto; para INVITACION permite únicamente la frase neutral breve
-            inmediatamente anterior a una sola invitación válida.
+            ante entrada ambigua/fuera de contexto; para INVITACION permite la frase neutral breve
+            inmediatamente anterior a una sola invitación válida, y el aviso urgente respaldado antes descrito.
             """;
 
     private static final String PROMPT_ALCANCE_CIERRE = """

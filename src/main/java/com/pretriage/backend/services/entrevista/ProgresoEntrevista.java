@@ -106,12 +106,13 @@ public final class ProgresoEntrevista {
     private final ObjetivoTurno objetivoTurno;
     private final boolean medicionConfirmadaObjetivo;
     private final boolean esperaRespuestaPaciente;
+    private final boolean hayAlarma;
 
     private ProgresoEntrevista(List<Dato> datos, MotivoCierre motivoCierre,
                                String instruccionSiguientePaso, boolean requiereAclaracion,
                                boolean tieneHechosClinicos, boolean ultimoTurnoPacienteTieneHechos,
                                ObjetivoTurno objetivoTurno, boolean medicionConfirmadaObjetivo,
-                               boolean esperaRespuestaPaciente) {
+                               boolean esperaRespuestaPaciente, boolean hayAlarma) {
         this.datos = List.copyOf(datos);
         this.motivoCierre = Objects.requireNonNull(motivoCierre);
         this.instruccionSiguientePaso = Objects.requireNonNull(instruccionSiguientePaso);
@@ -121,6 +122,7 @@ public final class ProgresoEntrevista {
         this.objetivoTurno = Objects.requireNonNull(objetivoTurno);
         this.medicionConfirmadaObjetivo = medicionConfirmadaObjetivo;
         this.esperaRespuestaPaciente = esperaRespuestaPaciente;
+        this.hayAlarma = hayAlarma;
     }
 
     public static ProgresoEntrevista evaluar(List<TurnoVoz> historial) {
@@ -142,6 +144,7 @@ public final class ProgresoEntrevista {
     public boolean tieneHechosClinicos() { return tieneHechosClinicos; }
     public boolean ultimoTurnoPacienteTieneHechos() { return ultimoTurnoPacienteTieneHechos; }
     public boolean esperaRespuestaPaciente() { return esperaRespuestaPaciente; }
+    public boolean hayAlarma() { return hayAlarma; }
     public ObjetivoTurno objetivoDelTurno() { return objetivoTurno; }
 
     /** Returns only fixed, non-sensitive local validation codes; unrecognized phrasing is delegated remotely. */
@@ -298,12 +301,16 @@ public final class ProgresoEntrevista {
             MotivoCierre reason = determineReason();
             SeleccionObjetivo selection = seleccionarObjetivo(reason);
             String instruction = instruction(reason, selection);
+            if (alarma && reason == MotivoCierre.EN_CURSO) {
+                instruction = "Hay una alarma literal afirmada: recomienda atención urgente sin demorarla "
+                        + "y continúa sin cerrar todavía. " + instruction;
+            }
             List<Dato> output = trackers.values().stream()
                     .map(t -> new Dato(t.clave.sintomaId(), t.dimension, t.estado, t.intentos, t.valor))
                     .toList();
             return new ProgresoEntrevista(output, reason, instruction, requiereAclaracion, hechosClinicos,
                     ultimoTurnoPacienteTieneHechos, selection.objetivo(), selection.medicionConfirmada(),
-                    esperaRespuestaPacienteEnTarea());
+                    esperaRespuestaPacienteEnTarea(), alarma);
         }
 
         private boolean esperaRespuestaPacienteEnTarea() {
@@ -335,12 +342,20 @@ public final class ProgresoEntrevista {
             requiereAclaracion = false;
             if (!turn.excluido()) {
                 stop |= stopSolicitado(text); // explicit patient intent is not a clinical fact
-                boolean alarmaTurno = ValidadorCierreEntrevistaVoz.alarmaLiteralAfirmada(turn.contenido());
+                List<ValidadorCierreEntrevistaVoz.CoincidenciaAlarma> alarmasTurno =
+                        ValidadorCierreEntrevistaVoz.alarmasLiteralesAfirmadas(turn.contenido());
+                boolean alarmaTurno = !alarmasTurno.isEmpty();
                 alarma |= alarmaTurno;
                 boolean emocionTurno = affirmatedPattern(text, EMOTION);
                 emocional |= emocionTurno;
                 hechosClinicos |= alarma || emocional;
                 List<Hallazgo> found = bindGenericPainReferences(symptoms(text), text);
+                if (found.isEmpty() && alarmaTurno) {
+                    // Keep each affirmed alarm as a separate literal target without naming a symptom.
+                    found = alarmasTurno.stream().map(alarma -> new Hallazgo(
+                            idAlarma(alarma.expresion()),
+                            "lo que te pasa", false, 0, alarma.segmento().length(), alarma.segmento())).toList();
+                }
                 ultimoTurnoPacienteTieneHechos = alarmaTurno || emocionTurno || !found.isEmpty();
                 if (!found.isEmpty()) {
                     motivoClinico = true;
@@ -841,7 +856,7 @@ public final class ProgresoEntrevista {
         }
 
         private ResultadoRespuesta answer(Tracker target, String text) {
-            List<String> mentioned = symptoms(text).stream().map(Hallazgo::sintomaId).toList();
+            List<String> mentioned = mencionesClinicas(text);
             boolean genericPainForPainTarget = mentioned.contains("dolor:general")
                     && target.clave.sintomaId().startsWith("dolor:");
             boolean explicitlyMentionsOther = !mentioned.isEmpty()
@@ -868,7 +883,6 @@ public final class ProgresoEntrevista {
         }
 
         private MotivoCierre determineReason() {
-            if (alarma) return MotivoCierre.ALARMA;
             if (stop) return MotivoCierre.SOLICITUD_PACIENTE;
             if (totalRespuestas >= MAX_TURNOS) return MotivoCierre.LIMITE_RECURSOS;
             if (invitacionAporteNoClaro) return MotivoCierre.LIMITE_RECURSOS;
@@ -876,10 +890,14 @@ public final class ProgresoEntrevista {
             if (!motivoClinico && !emocional) return MotivoCierre.EN_CURSO;
             boolean allTerminal = siguienteTrackerPendiente() == null;
             if (!allTerminal) return MotivoCierre.EN_CURSO;
-            if (yaDijoQueNoAgrega) return agotado() ? MotivoCierre.LIMITE_RECURSOS : MotivoCierre.DATOS_RESUELTOS;
+            if (yaDijoQueNoAgrega) return agotado() ? MotivoCierre.LIMITE_RECURSOS : motivoCierreResuelto();
             if (!invitacionAbierta) return MotivoCierre.EN_CURSO;
             if (!respondioInvitacion) return MotivoCierre.EN_CURSO;
-            return agotado() ? MotivoCierre.LIMITE_RECURSOS : MotivoCierre.DATOS_RESUELTOS;
+            return agotado() ? MotivoCierre.LIMITE_RECURSOS : motivoCierreResuelto();
+        }
+
+        private MotivoCierre motivoCierreResuelto() {
+            return alarma ? MotivoCierre.ALARMA : MotivoCierre.DATOS_RESUELTOS;
         }
 
         private boolean agotado() { return trackers.values().stream().anyMatch(t -> t.estado == Estado.AGOTADO); }
@@ -916,7 +934,7 @@ public final class ProgresoEntrevista {
         }
 
         private String instruction(MotivoCierre reason, SeleccionObjetivo selection) {
-            if (reason == MotivoCierre.ALARMA) return "La entrevista requiere cierre inmediato por una alarma literal afirmada; conserva solo los hechos del paciente.";
+            if (reason == MotivoCierre.ALARMA) return "Los objetivos de entrevista están resueltos y hay una alarma literal afirmada; conserva solo los hechos del paciente y cierra sin demorar la recomendación de atención urgente.";
             if (reason == MotivoCierre.SOLICITUD_PACIENTE) return "La persona pidió terminar; cierra la entrevista y conserva los datos desconocidos sin completarlos.";
             if (reason == MotivoCierre.LIMITE_RECURSOS && invitacionAporteNoClaro) {
                 return "Cierra como entrevista parcial: el aporte adicional siguió sin ser claro tras una aclaración. Conserva literalmente el aporte y los pendientes para la evaluación final; no inventes ni descartes síntomas.";
@@ -956,6 +974,19 @@ public final class ProgresoEntrevista {
             if (!invitacionAbierta) return "Haz una sola invitación breve para agregar algo sobre lo que ya le pasa; no sugieras síntomas nuevos.";
             return "Espera la respuesta a la invitación única.";
         }
+    }
+
+    private static String idAlarma(String expresion) {
+        return "alarma:" + expresion.replaceAll("[^a-z0-9]+", "_").replaceAll("^_|_$", "");
+    }
+
+    private static List<String> mencionesClinicas(String text) {
+        java.util.LinkedHashSet<String> mentioned = new java.util.LinkedHashSet<>(
+                symptoms(text).stream().map(Hallazgo::sintomaId).toList());
+        ValidadorCierreEntrevistaVoz.alarmasLiteralesAfirmadas(text).stream()
+                .map(alarma -> idAlarma(alarma.expresion()))
+                .forEach(mentioned::add);
+        return List.copyOf(mentioned);
     }
 
     private record ResultadoRespuesta(Estado estado, String valor) { }
@@ -1107,7 +1138,10 @@ public final class ProgresoEntrevista {
             String afterLastNegation = prefix.substring(last);
             if (afterLastNegation.matches("(?s)^no\\s+se\\s+si\\s+[^,;.!?]*$|^no\\s+recuerdo\\s+(?:si|haber)\\s+[^,;.!?]*$")) return false;
         }
-        return last < 0 || AFIRMACION.matcher(prefix.substring(last)).find();
+        // A match may begin at the subject itself (", me duele..."); include only
+        // that first token so a later affirmation cannot retroactively negate this check.
+        String primerToken = text.substring(start).split("\\s+", 2)[0];
+        return last < 0 || AFIRMACION.matcher(prefix.substring(last) + primerToken).find();
     }
 
     private static boolean affirmedAt(String text, int start) {

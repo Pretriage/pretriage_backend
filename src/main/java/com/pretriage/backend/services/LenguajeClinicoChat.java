@@ -9,6 +9,9 @@ import java.util.regex.Pattern;
 public final class LenguajeClinicoChat {
     private LenguajeClinicoChat() {}
 
+    public static final String AVISO_ATENCION_URGENTE =
+            "Buscá atención médica urgente. No esperes a completar el chat ni a recibir un turno para pedir ayuda.";
+
     /** Compatibility alias for the resource budget; closure is decided by ProgresoEntrevista. */
     @Deprecated(forRemoval = false)
     public static final int MAX_RESPUESTAS_PACIENTE =
@@ -103,7 +106,9 @@ public final class LenguajeClinicoChat {
             niega ese dato; "no tengo otros sintomas" evita explorar sintomas nuevos, pero no niega datos de
             cuantificacion aun no preguntados sobre sintomas ya afirmados. No interpretes una negativa como
             prueba de que no hay signos de alarma. Deja lo desconocido como desconocido.
-            Ante una alarma clara, recomienda atencion urgente y cierra sin demoras.
+            Ante una alarma clara, recomienda atencion urgente con claridad y sin demorar esa recomendacion.
+            La persona puede continuar respondiendo las preguntas pertinentes pendientes; no cierres la entrevista
+            solo por la alarma ni sugieras que debe esperar a completarla para pedir ayuda.
             """;
 
     /** The same equivalence boundary governs final generation, correction and verification. */

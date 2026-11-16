@@ -960,6 +960,13 @@ public class ChatService {
                 ? LenguajeClinicoChat.normalizarResultado(respuestaIa.resultado())
                 : null;
         String contenidoRespuesta = respuestaIa.mensaje().trim();
+        if (!respuestaIa.finalizado() && progreso.hayAlarma()
+                && !contenidoRespuesta.contains(LenguajeClinicoChat.AVISO_ATENCION_URGENTE)
+                && chat.getMensajes().stream().noneMatch(m -> m.getAutor() == AutorMensaje.BOT
+                && m.getContenido() != null
+                && m.getContenido().contains(LenguajeClinicoChat.AVISO_ATENCION_URGENTE))) {
+            contenidoRespuesta = LenguajeClinicoChat.AVISO_ATENCION_URGENTE + " " + contenidoRespuesta;
+        }
         if (resultadoConPrioridad != null && resultadoConPrioridad.requiereAtencionInmediata()
                 && resultadoConPrioridad.recomendacionSeguridad() != null
                 && !resultadoConPrioridad.recomendacionSeguridad().isBlank()
@@ -1083,6 +1090,10 @@ public class ChatService {
     private String promptPregunta(ProgresoEntrevista progreso, String correccion,
                                   java.util.Optional<TriageIaClient.MotivoRechazoSemantico> motivoSemantico) {
         String tarea = progreso.instruccionSiguientePaso();
+        if (progreso.hayAlarma()) {
+            tarea += " El backend muestra el aviso de atencion urgente; formula solo la pregunta "
+                    + "o invitacion del objetivo pendiente, sin repetir el aviso ni anunciar el cierre.";
+        }
         String correccionTexto = motivoSemantico.map(motivo -> " La pregunta anterior no fue aceptable. "
                 + reglaCorreccionPregunta(motivo, progreso)
                 + " Reescribila como una unica pregunta breve, pertinente al relato, sin repetir la pregunta anterior.")

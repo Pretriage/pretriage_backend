@@ -75,7 +75,7 @@ class SesionVozContinuidadGeminiSmokeTest {
                 entrada(session, "Terminá el chat, por favor.");
             } else {
                 entrada(session, motivoEsperado.equals("ALARMA")
-                        ? "Ahora noto que me cuesta bastante respirar."
+                        ? "Ahora noto que me cuesta bastante respirar desde hoy."
                         : "Gracias, no tengo nada más que agregar.");
             }
             session.alRecibir("{\"serverContent\":{\"turnComplete\":true}}");

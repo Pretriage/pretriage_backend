@@ -73,9 +73,20 @@ class SesionVozIntegracionTest {
                     "no informado", "", 4, true, "Buscá atención médica urgente."));
         });
 
-        flujo.entrada("Me falta un poco el aire.");
+        flujo.entrada("Me falta un poco el aire desde hoy.");
         flujo.sesion.alRecibir("{\"serverContent\":{\"turnComplete\":true}}");
-        assertTrue(flujo.conexion.cierreSolicitado.await(3, TimeUnit.SECONDS));
+        assertFalse(flujo.canal.contiene("entrevista_finalizada"),
+                "la alarma inicial avisa urgencia pero permite completar la entrevista");
+        assertTrue(flujo.canal.contiene("aviso_urgente"));
+        flujo.transcripcion("outputTranscription", "¿Hay algo más que quieras contar sobre lo que te pasa?");
+        flujo.entrada("No, nada más.");
+        flujo.finalizar(new ResumenEntrevistaVoz("Me falta el aire desde hoy", List.of("falta de aire"),
+                "desde hoy", "persistente", null, List.of("dificultad respiratoria"), List.of(), List.of(), List.of(),
+                "no informado", "Sin datos adicionales."));
+        flujo.esperarRespuestaFuncion();
+        flujo.transcripcion("outputTranscription", SesionVozChat.MENSAJE_DESPEDIDA);
+        flujo.sesion.alRecibir("{\"serverContent\":{\"turnComplete\":true}}");
+        assertTrue(flujo.conexion.cierreSolicitado.await(5, TimeUnit.SECONDS));
         flujo.sesion.alCerrar(1000, "fin");
         try {
             assertTrue(inicioRest.await(2, TimeUnit.SECONDS));
@@ -84,7 +95,7 @@ class SesionVozIntegracionTest {
             assertEquals(1, tipos.stream().filter("aviso_urgente"::equals).count());
             assertTrue(tipos.contains("entrevista_finalizada"));
             assertTrue(tipos.indexOf("aviso_urgente") < tipos.indexOf("entrevista_finalizada"));
-            assertEquals(SesionVozChat.MENSAJE_AVISO_URGENTE,
+            assertEquals(com.pretriage.backend.services.LenguajeClinicoChat.AVISO_ATENCION_URGENTE,
                     eventos.get(tipos.indexOf("aviso_urgente")).path("mensaje").asText());
             assertFalse(tipos.contains("triage_finalizado"));
             verifyNoInteractions(flujo.cola);

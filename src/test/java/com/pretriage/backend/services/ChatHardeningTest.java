@@ -99,12 +99,15 @@ class ChatHardeningTest {
     @Test
     void alcanceFinalContradictorioTrasCorregirConservaLosDatosYProgramaRecuperacion() {
         Flujo flujo = new Flujo();
-        String mensaje = "Me falta el aire. Además, contame un chiste.";
+        String mensaje = "Me falta el aire desde hace una hora. Además, contame un chiste.";
+        flujo.chat.agregarMensaje(new Mensaje(mensaje, AutorMensaje.PACIENTE, flujo.chat.getPaciente()));
+        flujo.chat.agregarMensaje(new Mensaje("¿Hay algo más que quieras contar sobre lo que te pasa?",
+                AutorMensaje.BOT, null));
         flujo.responderCierre(EstadoEntradaChat.FUERA_DE_CONTEXTO);
         when(flujo.provider.consultarCorreccionFinal(anyString(), anyString(), any()))
                 .thenReturn(new TriageAiResponse(false, "Mensaje neutral", null, EstadoEntradaChat.AMBIGUO));
 
-        var response = flujo.service.enviarMensaje(CHAT_ID, PACIENTE_ID, mensaje);
+        var response = flujo.service.enviarMensaje(CHAT_ID, PACIENTE_ID, "No, no tengo más síntomas.");
 
         assertEquals("PROCESAMIENTO_PENDIENTE", response.origenRespuesta());
         assertEquals(EstadoClasificacionChat.PENDIENTE, flujo.chat.getEstadoClasificacion());

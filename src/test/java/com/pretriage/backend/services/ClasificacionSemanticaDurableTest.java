@@ -83,6 +83,7 @@ class ClasificacionSemanticaDurableTest {
     static Stream<CasoAlarma> casosConAlarma() {
         return Stream.of(
                 new CasoAlarma("Tengo dolor de pecho", "dolor de pecho", 4),
+                new CasoAlarma("Me falta el aire", "falta de aire", 4),
                 new CasoAlarma("Tengo un sangrado abundante", "sangrado abundante", 4));
     }
 
@@ -194,11 +195,19 @@ class ClasificacionSemanticaDurableTest {
         AtomicInteger verificaciones = new AtomicInteger();
         String respuestaGenerada = respuestaFinal(caso);
         when(gemini.generar(anyString(), anyString(), anyMap(), any(Duration.class))).thenAnswer(invocation ->
-                respuestaProveedor(invocation.getArgument(0), respuestaGenerada, verificaciones));
+                respuestaProveedor(invocation.getArgument(0), invocation.getArgument(1), respuestaGenerada, verificaciones));
 
-        String solicitudId = UUID.randomUUID().toString();
-        var aceptado = textoTurnoService.aceptarTurno(chatId.toString(), pacienteAuth, caso.texto(), solicitudId);
-        assertEquals(EstadoTurnoTexto.PENDIENTE, aceptado.estadoTurnoTexto());
+        enviarYEsperar(caso.texto(), false);
+        var primerTurno = chatService.obtenerChat(chatId.toString(), pacienteAuth);
+        assertFalse(primerTurno.finalizado(), "An alarm must not skip the interview");
+        assertEquals(EstadoClasificacionChat.NO_SOLICITADA, primerTurno.estadoClasificacion());
+        assertNull(repoChat.findById(chatId).orElseThrow().getResultadoTriageJson());
+        assertTrue(primerTurno.mensajes().getLast().contenido().contains(LenguajeClinicoChat.AVISO_ATENCION_URGENTE));
+        enviarYEsperar("Hace una hora", false);
+        boolean dolor = caso.descripcion().contains("dolor");
+        if (dolor) enviarYEsperar("7/10", false);
+        String solicitudId = enviarYEsperar("No, nada más", true);
+        int cantidadTurnos = dolor ? 4 : 3;
 
         long limite = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
         var chat = chatService.obtenerChat(chatId.toString(), pacienteAuth);
@@ -215,7 +224,9 @@ class ClasificacionSemanticaDurableTest {
         assertEquals(caso.prioridad(), resultado.path("nivelPrioridad").intValue());
         assertTrue(resultado.path("requiereAtencionInmediata").booleanValue());
         assertEquals(caso.descripcion(), resultado.path("signosAlarma").get(0).stringValue());
-        assertEquals(1, chat.mensajes().stream().filter(m -> "PACIENTE".equals(m.autor())).count());
+        assertEquals(cantidadTurnos, chat.mensajes().stream().filter(m -> "PACIENTE".equals(m.autor())).count());
+        assertEquals(1, chat.mensajes().stream().filter(m -> "BOT".equals(m.autor())
+                && m.contenido().contains(LenguajeClinicoChat.AVISO_ATENCION_URGENTE)).count());
         assertEquals(2, verificaciones.get(), "the initial result is rejected and its correction is accepted");
 
         EntradaCola entradaFinal = repoEntradas.findByConsultaMedicaId(consultaId).orElseThrow();
@@ -229,26 +240,52 @@ class ClasificacionSemanticaDurableTest {
                 "SELECT id FROM entrada_cola WHERE id_consulta_medica=?", Long.class, consultaId));
         assertEquals(1, db.queryForObject("SELECT count(*) FROM entrada_cola WHERE id_consulta_medica=?",
                 Integer.class, consultaId));
-        assertEquals(1, db.queryForObject("SELECT count(*) FROM mensaje WHERE chat_id=? AND autor='PACIENTE'",
+        assertEquals(cantidadTurnos, db.queryForObject("SELECT count(*) FROM mensaje WHERE chat_id=? AND autor='PACIENTE'",
                 Integer.class, chatId));
 
         clearInvocations(gemini);
-        var repetido = textoTurnoService.aceptarTurno(chatId.toString(), pacienteAuth, caso.texto(), solicitudId);
+        var repetido = textoTurnoService.aceptarTurno(chatId.toString(), pacienteAuth, "No, nada más", solicitudId);
         assertEquals(EstadoTurnoTexto.COMPLETADA, repetido.estadoTurnoTexto());
         verifyNoInteractions(gemini);
-        assertEquals(1, db.queryForObject("SELECT count(*) FROM mensaje WHERE chat_id=? AND autor='PACIENTE'",
+        assertEquals(cantidadTurnos, db.queryForObject("SELECT count(*) FROM mensaje WHERE chat_id=? AND autor='PACIENTE'",
                 Integer.class, chatId));
         assertEquals(1, db.queryForObject("SELECT count(*) FROM entrada_cola WHERE id_consulta_medica=?",
                 Integer.class, consultaId));
         assertEquals(entradaId, repoEntradas.findByConsultaMedicaId(consultaId).orElseThrow().getId());
     }
 
-    private static String respuestaProveedor(String prompt, String respuestaFinal,
+    private String enviarYEsperar(String texto, boolean finalizado) throws Exception {
+        String id = UUID.randomUUID().toString();
+        textoTurnoService.aceptarTurno(chatId.toString(), pacienteAuth, texto, id);
+        long limite = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        var chat = chatService.obtenerChat(chatId.toString(), pacienteAuth);
+        while ((chat.estadoTurnoTexto() != EstadoTurnoTexto.COMPLETADA
+                || finalizado && chat.estadoClasificacion() != EstadoClasificacionChat.COMPLETADA)
+                && System.nanoTime() < limite) {
+            Thread.sleep(25);
+            chat = chatService.obtenerChat(chatId.toString(), pacienteAuth);
+        }
+        assertEquals(EstadoTurnoTexto.COMPLETADA, chat.estadoTurnoTexto());
+        assertEquals(finalizado, chat.finalizado());
+        assertFalse(chat.cierreParcial());
+        return id;
+    }
+
+    private String respuestaProveedor(String prompt, String input, String respuestaFinal,
                                              AtomicInteger verificaciones) {
         if (prompt.contains("verificador independiente de una clasificación final")) {
             return verificaciones.incrementAndGet() == 1
                     ? "{\"valido\":false,\"motivo\":\"INFERENCIA\"}"
                     : "{\"valido\":true,\"motivo\":null}";
+        }
+        if (prompt.contains("verificador independiente")) return "{\"valido\":true}";
+        var objetivo = objectMapper.readTree(input).path("objetivoDelTurno");
+        if (!objetivo.isMissingNode()) {
+            String pregunta = "INVITACION".equals(objetivo.path("tipo").stringValue())
+                    ? "¿Hay algo más que quieras contar sobre lo que te pasa?"
+                    : "INTENSIDAD".equals(objetivo.path("dimension").stringValue())
+                    ? "¿Qué intensidad tiene el dolor del 1 al 10?" : "¿Desde cuándo empezó lo que te pasa?";
+            return objectMapper.writeValueAsString(java.util.Map.of("mensaje", pregunta, "estadoEntrada", "RELEVANTE"));
         }
         return respuestaFinal;
     }
@@ -268,7 +305,8 @@ class ClasificacionSemanticaDurableTest {
                 + "\"resultado\":{"
                 + "\"motivoConsulta\":\"" + valor + "\","
                 + "\"sintomas\":[\"" + valor + "\"],"
-                + "\"inicio\":\"no informado\",\"evolucion\":\"no informado\",\"intensidadDolor\":null,"
+                + "\"inicio\":\"Hace una hora\",\"evolucion\":\"no informado\",\"intensidadDolor\":"
+                + (caso.descripcion().contains("dolor") ? "7" : "null") + ","
                 + "\"signosAlarma\":[\"" + valor + "\"],\"antecedentesRelevantes\":[],"
                 + "\"medicamentos\":[],\"alergias\":[],\"posibilidadEmbarazo\":\"no informado\","
                 + "\"observaciones\":\"\",\"nivelPrioridad\":" + caso.prioridad() + ","
