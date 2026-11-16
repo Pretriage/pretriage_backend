@@ -1264,6 +1264,36 @@ class ProgresoEntrevistaTest {
     }
 
     @Test
+    void preguntaExplicitaVinculaUnaAlarmaConocidaSinQuitarLaAmbiguedadDeLaPreguntaGenerica() {
+        var inicial = ProgresoEntrevista.evaluar(turnos(
+                p("Tengo confusión"), p("Me cuesta respirar")));
+
+        assertTrue(inicial.validarPreguntaPropuesta("¿Desde cuándo empezó la confusión?").isEmpty());
+        assertEquals("OBJETIVO_AMBIGUO",
+                inicial.validarPreguntaPropuesta("¿Desde cuándo empezó eso?").orElseThrow());
+
+        var progreso = ProgresoEntrevista.evaluar(turnos(
+                p("Tengo confusión"), p("Me cuesta respirar"),
+                b("¿Desde cuándo empezó la confusión?"), p("Desde ayer")));
+
+        var confusion = dato(progreso, "alarma:confusion", ProgresoEntrevista.Dimension.INICIO);
+        var respiracion = dato(progreso, "alarma:me_cuesta_respirar", ProgresoEntrevista.Dimension.INICIO);
+        assertEquals(ProgresoEntrevista.Estado.RESPONDIDO, confusion.estado());
+        assertEquals("desde ayer", confusion.valor());
+        assertEquals(ProgresoEntrevista.Estado.PENDIENTE, respiracion.estado());
+        assertEquals(null, respiracion.valor());
+    }
+
+    @Test
+    void preguntaDeBotVinculaVariantesPronominalesYArticulosAAlarmasConocidas() {
+        var respiracion = ProgresoEntrevista.evaluar(turnos(p("Me cuesta respirar")));
+        assertTrue(respiracion.validarPreguntaPropuesta("¿Desde cuándo te cuesta respirar?").isEmpty());
+
+        var aire = ProgresoEntrevista.evaluar(turnos(p("Tengo falta de aire")));
+        assertTrue(aire.validarPreguntaPropuesta("¿Desde cuándo te falta el aire?").isEmpty());
+    }
+
+    @Test
     void solicitudDePararYLimitesTienenPrecedenciaSobreElCierrePorAlarma() {
         var stop = ProgresoEntrevista.evaluar(turnos(
                 p("Me cuesta respirar"), b("¿Desde cuándo empezó eso que te pasa?"), p("Quiero terminar el chat")));

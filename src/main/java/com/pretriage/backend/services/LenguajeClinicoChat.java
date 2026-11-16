@@ -131,6 +131,9 @@ public final class LenguajeClinicoChat {
             narrado en pasado no aporta una fecha o duracion: inicio="no informado" y evolucion="no informado"
             son validos sin una referencia temporal o descripcion del cambio expresadas por el paciente.
             Conserva las referencias temporales que si haya afirmado, incluidas las relativas o contextuales.
+            Si dice que no sabe la fecha exacta pero afirma "desde que" ocurrio un hecho, ese inicio relativo
+            si esta informado. No aceptes inicio="no informado" omitiendo esa referencia afirmada, aunque
+            la cita de evidencia contenga la referencia: la cita no sustituye el campo de inicio.
             Una sensacion diferente, una metafora, un termino ambiguo o una negacion no se convierten en un
             sintoma afirmado por parecerse a una etiqueta clinica. Un dato que solo dijo BOT o un resumen
             generado no adquiere respaldo por normalizarlo.

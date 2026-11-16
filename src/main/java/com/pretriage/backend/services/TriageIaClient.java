@@ -142,6 +142,11 @@ public class TriageIaClient {
             por el backend: exige que respuestaPropuesta corresponda al tipo, sintomaId y dimension de
             ese objetivo. Rechaza proponer otro dato aunque también esté pendiente. Para DATO, la pregunta
             debe pedir solo la dimensión y síntoma indicados. Exige una sola pregunta o invitación por turno.
+            El aviso de urgencia y el cierre son decisiones independientes. Una alarma afirmada no vuelve
+            incorrecta una continuacion breve cuando objetivoDelTurno es DATO o INVITACION. No exijas cerrar
+            por esa alarma ni rechaces por COMUNICACION la invitacion unica a agregar algo, por ejemplo
+            "¿Queres agregar algo mas sobre lo que te pasa?", si sigue siendo el objetivo del backend.
+            El paciente ya recibe el aviso de pedir ayuda sin esperar a completar la entrevista.
             Si se pregunta o aclara la intensidad de un dolor, debe incluir la escala del 1 al 10.
             Una pregunta sobre las actividades diarias no cumple ese objetivo. Para ACLARACION,
             debe aclarar solo el motivo/dato

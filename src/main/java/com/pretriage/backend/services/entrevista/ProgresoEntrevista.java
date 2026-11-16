@@ -159,7 +159,8 @@ public final class ProgresoEntrevista {
         boolean invitacion = INVITATION.matcher(text).find();
         boolean cierre = containsClosingPhrase(text);
         Dimension proposedDimension = askedDimension(text);
-        List<String> mentioned = symptoms(text).stream().map(Hallazgo::sintomaId).distinct().toList();
+        List<String> mentioned = mencionesClinicasEnPregunta(text,
+                datos.stream().map(Dato::sintomaId).distinct().toList());
         if (objetivo.tipo() == TipoObjetivo.CERRAR) {
             return hasQuestionForm(text) || proposedDimension != null || invitacion
                     ? Optional.of("PREGUNTA_TRAS_CIERRE") : Optional.empty();
@@ -555,7 +556,7 @@ public final class ProgresoEntrevista {
             if (isMeasurementConfirmationQuestion(text)) {
                 List<Tracker> temperatures = trackers.values().stream()
                         .filter(t -> t.estado == Estado.PENDIENTE && t.dimension == Dimension.TEMPERATURA).toList();
-                List<String> mentioned = symptoms(text).stream().map(Hallazgo::sintomaId).distinct().toList();
+                List<String> mentioned = mencionesClinicasEnPregunta(text, idsAlarmaConocidos());
                 List<Tracker> named = temperatures.stream().filter(t -> mentioned.contains(t.clave.sintomaId())).toList();
                 List<Tracker> targets = named.size() == 1 ? named : (mentioned.isEmpty() && temperatures.size() == 1 ? temperatures : List.of());
                 if (targets.size() == 1) {
@@ -568,7 +569,7 @@ public final class ProgresoEntrevista {
             }
             Dimension dimension = askedDimension(text);
             if (dimension == null) {
-                List<String> mencionados = symptoms(text).stream().map(Hallazgo::sintomaId).distinct().toList();
+                List<String> mencionados = mencionesClinicasEnPregunta(text, idsAlarmaConocidos());
                 boolean mencionaSoloDatosConocidos = mencionados.isEmpty()
                         || mencionados.stream().allMatch(this::sintomaConocidoParaBuilder);
                 if (objetivoAntesDelBot.objetivo().tipo() == TipoObjetivo.INVITACION
@@ -586,7 +587,7 @@ public final class ProgresoEntrevista {
                 tarea = new Tarea(TipoTarea.NINGUNA, List.of(), text);
                 return;
             }
-            List<String> mentioned = symptoms(text).stream().map(Hallazgo::sintomaId).toList();
+            List<String> mentioned = mencionesClinicasEnPregunta(text, idsAlarmaConocidos());
             List<Tracker> candidates = dimension == Dimension.IMPACTO
                     ? trackers.values().stream().filter(t -> t.dimension == Dimension.INICIO)
                             .map(t -> candidatoImpactoHistorico(t))
@@ -661,6 +662,10 @@ public final class ProgresoEntrevista {
                     .filter(sintomaId -> sintomaId.startsWith("dolor:") && !sintomaId.equals("dolor:general"))
                     .distinct().count();
             return id.equals("dolor:general") && knownPainIds == 1;
+        }
+
+        private List<String> idsAlarmaConocidos() {
+            return trackers.keySet().stream().map(Clave::sintomaId).filter(id -> id.startsWith("alarma:")).distinct().toList();
         }
 
         private boolean esPreguntaDeAporteAdicional(String text) {
@@ -986,6 +991,23 @@ public final class ProgresoEntrevista {
         ValidadorCierreEntrevistaVoz.alarmasLiteralesAfirmadas(text).stream()
                 .map(alarma -> idAlarma(alarma.expresion()))
                 .forEach(mentioned::add);
+        return List.copyOf(mentioned);
+    }
+
+    private static List<String> mencionesClinicasEnPregunta(String text, List<String> idsAlarmaConocidos) {
+        java.util.LinkedHashSet<String> mentioned = new java.util.LinkedHashSet<>(
+                symptoms(text).stream().map(Hallazgo::sintomaId).toList());
+        String pregunta = norm(text);
+        for (String id : idsAlarmaConocidos) {
+            if (!id.startsWith("alarma:")) continue;
+            String expresion = id.substring("alarma:".length()).replace('_', ' ');
+            List<String> formas = new java.util.ArrayList<>(List.of(expresion));
+            if (expresion.startsWith("me ")) formas.add("te " + expresion.substring(3));
+            if (expresion.equals("falta de aire")) formas.add("falta el aire");
+            if (formas.stream().anyMatch(forma -> Pattern.compile("\\b" + Pattern.quote(forma) + "\\b").matcher(pregunta).find())) {
+                mentioned.add(id);
+            }
+        }
         return List.copyOf(mentioned);
     }
 

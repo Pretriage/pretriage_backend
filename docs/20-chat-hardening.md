@@ -295,6 +295,8 @@ un aviso urgente en la primera respuesta; voz emite `aviso_urgente` una vez por
 sesión. Ambos indican pedir atención sin esperar al chat y continúan únicamente
 con los datos pertinentes que sigan pendientes y la invitación abierta única.
 `hayAlarma()` conserva la detección independientemente de `puedeCerrar()`.
+El verificador de preguntas acepta el objetivo pendiente incluso ante una alarma
+ya avisada; una invitación pertinente no se rechaza por requerir atención urgente.
 Las alarmas sin un objetivo de síntoma ya reconocido conservan objetivos de inicio
 separados por expresión afirmada. Una fecha de otra manifestación no completa ese
 objetivo; las fechas ambiguas quedan pendientes. La negación de una lista se
