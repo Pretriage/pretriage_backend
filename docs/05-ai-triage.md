@@ -385,8 +385,10 @@ priority. A global refusal to add information permits closure even when the
 complaint falls outside the local vocabulary, leaving unclear facts for the final
 Gemini result to mark as unknown.
 
-When a valid final result requires immediate attention, the chat response also
-includes its `recomendacionSeguridad`, even if the model's `mensaje` omits it.
+When a valid final result requires immediate attention, the chat response is composed
+from the fixed registration acknowledgement and its validated `recomendacionSeguridad`.
+The model's `mensaje` is not concatenated in this case, preventing duplicate paraphrases.
+The recommendation uses a concise, cordial tone while preserving the urgency.
 
 Each intermediate text request asks Gemini for `mensaje` and `estadoEntrada`; the backend decides
 whether the interview remains open or moves to final classification. The prompt

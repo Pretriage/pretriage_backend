@@ -24,6 +24,8 @@ import com.pretriage.backend.repositories.RepoEntradasCola;
 import com.pretriage.backend.repositories.RepoPacientes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.Optional;
@@ -483,7 +485,8 @@ class ChatServiceTest {
                 chat.getResultadoTriageJson(), TriageResultDTO.class);
         assertEquals(4, resultadoGuardado.nivelPrioridad());
         assertTrue(resultadoGuardado.requiereAtencionInmediata());
-        assertEquals("Cierre corregido Busque atencion urgente.", response.respuesta().contenido());
+        assertEquals(LenguajeClinicoChat.CIERRE_REGISTRO_ENTREVISTA + " Busque atencion urgente.",
+                response.respuesta().contenido());
         verify(triageIaClient).consultarCorreccionFinal(anyString(), anyString(), any());
         verify(atencionHospitalService).finalizarTriageEIngresarACola(anyString(),
                 eq(NivelDeGravedad.MUY_URGENTE), anyString(), eq(chat));
@@ -846,19 +849,25 @@ class ChatServiceTest {
         verifyNoInteractions(atencionHospitalService);
     }
 
-    @Test
-    void cierreIaTrasInvitacionMuestraLaRecomendacionAunqueFalteEnElMensaje() {
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "Gracias. Registré tus síntomas y la preclasificación.",
+            "Gracias. Ya registré tus respuestas para el equipo médico. Te recomendamos llamar a emergencias. "
+                    + "Por favor busca atención urgente ahora.",
+            "Gracias. Ya registré tus respuestas para el equipo médico. Te recomendamos llamar a emergencias de inmediato."
+    })
+    void cierreIaTrasInvitacionMuestraUnaSolaRecomendacionUrgente(String mensajeIa) {
         Chat chat = prepararChat();
         chat.agregarMensaje(new Mensaje("No puedo respirar desde hace una hora.", AutorMensaje.PACIENTE,
                 chat.getPaciente()));
         chat.agregarMensaje(new Mensaje("¿Hay algo más que quieras contar sobre lo que te pasa?", AutorMensaje.BOT, null));
         when(triageIaClient.consultar(anyString(), anyString(), anyBoolean())).thenReturn(new TriageAiResponse(
                 true,
-                "Gracias. Registre tus sintomas y la preclasificacion.",
+                mensajeIa,
                 new TriageResultDTO("dificultad respiratoria", List.of("dificultad respiratoria"), "ahora",
                         "empeorando", null, List.of("dificultad respiratoria"), List.of(), List.of(), List.of(),
                         "no informado", "signo de alarma", 5, true,
-                        "Llama a emergencias de inmediato.")));
+                        "Te recomendamos llamar a emergencias de inmediato.")));
         when(atencionHospitalService.finalizarTriageEIngresarACola(eq("auth0|paciente"), any(NivelDeGravedad.class), anyString(), any(Chat.class)))
                 .thenReturn(new TiempoEstimadoAtencionResponse());
 
@@ -866,8 +875,13 @@ class ChatServiceTest {
 
         assertTrue(chat.isFinalizado());
         assertEquals("GEMINI", respuesta.origenRespuesta());
-        assertTrue(respuesta.respuesta().contenido().contains("Llama a emergencias de inmediato."));
-        assertEquals(1, respuesta.respuesta().contenido().split("Llama a emergencias de inmediato.", -1).length - 1);
+        assertEquals("Gracias. Ya registré tus respuestas para el equipo médico. "
+                        + "Te recomendamos llamar a emergencias de inmediato.",
+                respuesta.respuesta().contenido());
+        assertEquals(1, respuesta.respuesta().contenido().split("Te recomendamos llamar a emergencias de inmediato.", -1).length - 1);
+        var resultadoGuardado = new ObjectMapper().readTree(chat.getResultadoTriageJson());
+        assertEquals(5, resultadoGuardado.path("nivelPrioridad").asInt());
+        assertEquals("Te recomendamos llamar a emergencias de inmediato.", resultadoGuardado.path("recomendacionSeguridad").asText());
         verify(atencionHospitalService, times(1)).finalizarTriageEIngresarACola(anyString(), any(), anyString(), same(chat));
     }
 
