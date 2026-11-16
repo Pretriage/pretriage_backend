@@ -865,7 +865,7 @@ public class ChatService {
         return switch (motivo) {
             case SIN_RESPALDO -> "Revisa sintomas, signos de alarma, antecedentes, medicamentos y alergias. Conserva un dato solo si un turno del PACIENTE lo afirma claramente; los turnos BOT son contexto, no evidencia. Omite lo que no tenga respaldo.";
             case NEGACION -> "Revisa el alcance de cada negacion. No incluyas como afirmados los sintomas o antecedentes que el paciente nego; conserva la negacion solo en observaciones.";
-            case INFERENCIA -> "Quita diagnosticos, causas y sintomas inferidos. Conserva solo lo que el paciente dijo y usa lenguaje descriptivo sin atribuir una causa.";
+            case INFERENCIA -> "Quita diagnosticos, causas y sintomas inferidos. Si dudas de la normalizacion, conserva literalmente la descripcion afirmada por el paciente, sin agregar especificidad. No elimines una alarma respaldada ni rebajes su prioridad para superar la validacion: conserva el signo en signosAlarma con su evidencia y los flags de atencion inmediata correspondientes.";
             case COMUNICACION -> "Corrige el mensaje dirigido al paciente: agradece y confirma el registro, sin mencionar triage, clasificacion, prioridad ni resultados internos.";
             case INTENSIDAD_NO_DOLOR -> "intensidadDolor solo puede contener una escala de dolor que el paciente atribuyo explicitamente al dolor. Una intensidad de otra sensacion no es dolor; usa null si no informo dolor cuantificado.";
             case OMISION_INICIO -> "Conserva en inicio y observaciones cada referencia temporal afirmada por el paciente, incluso si también dice que no sabe la fecha exacta. No inventes una fecha absoluta ni una evolución. Si hay varios inicios, vincula cada uno con su síntoma.";

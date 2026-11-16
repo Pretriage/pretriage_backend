@@ -28,11 +28,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -42,6 +45,7 @@ import static org.mockito.Mockito.when;
 /** Opt-in provider evaluation with synthetic text only; no Spring context, repositories or database. */
 @EnabledIfSystemProperty(named = "pretriage.gemini.hardening.live", matches = "true")
 class ChatHardeningGeminiSmokeTest {
+    private static final AtomicLong CHAT_IDS = new AtomicLong(1000);
     private final ObjectMapper mapper = new ObjectMapper();
 
     private TriageIaClient client() {
@@ -164,6 +168,196 @@ class ChatHardeningGeminiSmokeTest {
         assertEquals(java.util.Optional.of(TriageIaClient.MotivoCorreccionFinal.OMISION_INICIO),
                 TriageIaClient.motivoCorreccionFinal(error));
         assertEquals(2, harness.calls().get(), "una fecha desconocida no borra el inicio relativo expresado");
+    }
+
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "tengo dolor de pecho | dolor torácico | 5 | true",
+            "me duele el pecho | dolor torácico | 4 | true",
+            "me falta el aire | dificultad respiratoria | 4 | true",
+            "me duele la cabeza | cefalea | 2 | false",
+            "me duele la panza | dolor abdominal | 3 | false",
+            "me duele al tragar | dolor al tragar | 2 | false",
+            "tengo ganas de vomitar | náuseas | 2 | false",
+            "vomité | episodio de vómito | 3 | false",
+            "me arde al orinar | ardor al orinar | 2 | false",
+            "me pica el brazo derecho | picazón en el brazo derecho | 1 | false",
+            "se me hinchó el tobillo izquierdo | hinchazón del tobillo izquierdo | 2 | false",
+            "tengo un moratón en el brazo izquierdo | moretón en el brazo izquierdo | 1 | false",
+            "siento hormigueo en la mano derecha | hormigueo en la mano derecha | 2 | false",
+            "estoy muy triste | tristeza | 2 | false",
+            "Me sangra la nariz | sangrado nasal | 2 | false",
+            "Tengo un sangrado abundante | sangrado abundante | 4 | true",
+            "Tengo un sangrado leve | sangrado leve | 2 | false"
+    })
+    void verificadorRealAceptaNormalizacionConEvidenciaLiteral(String relato, String sintoma,
+                                                              int prioridad, boolean alarma) {
+        var harness = clientWithRealVerifier(syntheticClinicalFinal(relato, sintoma, prioridad, alarma));
+
+        var response = harness.client().consultar(LenguajeClinicoChat.REGLAS_RESULTADO,
+                conversation(List.of(patient(relato))), true);
+
+        assertEquals(EstadoEntradaChat.RELEVANTE, response.estadoEntrada());
+        assertTrue(response.finalizado());
+        assertEquals(List.of(sintoma), response.resultado().sintomas());
+        assertEquals(alarma ? List.of(sintoma) : List.of(), response.resultado().signosAlarma());
+        assertEquals(prioridad, response.resultado().nivelPrioridad());
+        assertEquals(alarma, response.resultado().requiereAtencionInmediata());
+        assertEquals(2, harness.calls().get(), "la equivalencia debe aceptarla el verificador real");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"no tengo dolor de pecho", "siento un vacío en el pecho"})
+    void verificadorRealRechazaDolorToracicoSinAfirmacionDeDolor(String relato) {
+        var harness = clientWithRealVerifier(syntheticClinicalFinal(relato, "dolor torácico", 4, true));
+
+        var error = assertThrows(ProveedorIaException.class, () -> harness.client().consultar(
+                LenguajeClinicoChat.REGLAS_RESULTADO, conversation(List.of(patient(relato))), true));
+
+        assertTrue(TriageIaClient.esErrorDeRespuesta(error));
+        assertEquals(2, harness.calls().get(), "una cita literal no convierte negaciones ni otras sensaciones en dolor");
+    }
+
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "no tengo fiebre | fiebre",
+            "no sé si tengo fiebre | fiebre",
+            "me duele el brazo izquierdo | dolor en el brazo derecho",
+            "me duele la cabeza | dolor de cabeza intenso",
+            "tengo tos | tos con sangre",
+            "tengo tos | neumonía"
+    })
+    void verificadorRealRechazaHechosNuevosAunqueLaCitaSeaLiteral(String relato, String propuesta) {
+        var harness = clientWithRealVerifier(syntheticClinicalFinal(relato, propuesta, 2, false));
+
+        var error = assertThrows(ProveedorIaException.class, () -> harness.client().consultar(
+                LenguajeClinicoChat.REGLAS_RESULTADO, conversation(List.of(patient(relato))), true));
+
+        assertTrue(TriageIaClient.esErrorDeRespuesta(error));
+        assertEquals(2, harness.calls().get(), "la normalización no permite cambiar ni inventar hechos");
+    }
+
+    @Test
+    void generacionYVerificacionRealesClasificanTresVecesCadaAlarmaAfirmada() {
+        for (String relato : List.of("Tengo dolor de pecho", "Me falta el aire", "Tengo un sangrado abundante")) {
+            for (int repeticion = 0; repeticion < 3; repeticion++) {
+                clasificaAlarmaConChatServiceReal(relato, repeticion);
+            }
+        }
+    }
+
+    private void clasificaAlarmaConChatServiceReal(String relato, int repeticion) {
+        long id = CHAT_IDS.incrementAndGet();
+        String pacienteAuth = "auth0|synthetic-smoke";
+        Chat chat = new Chat(new Paciente());
+        chat.setId(id);
+        addBot(chat, "Hola. Contame qué te pasa.");
+
+        RepoChat chats = mock(RepoChat.class);
+        RepoPacientes patients = mock(RepoPacientes.class);
+        RepoConsultasMedicas consultations = mock(RepoConsultasMedicas.class);
+        RepoEntradasCola entries = mock(RepoEntradasCola.class);
+        AtencionHospitalService queue = mock(AtencionHospitalService.class);
+        List<String> diagnostics = new CopyOnWriteArrayList<>();
+        var calls = new AtomicInteger();
+        var realGenerator = generator();
+        var observedGenerator = mock(GeminiJsonClient.class);
+        when(observedGenerator.generar(anyString(), anyString(), any(), any(Duration.class)))
+                .thenAnswer(invocation -> {
+                    int call = calls.incrementAndGet();
+                    String system = invocation.getArgument(0);
+                    String input = invocation.getArgument(1);
+                    try {
+                        String response = realGenerator.generar(system, input, invocation.getArgument(2),
+                                invocation.getArgument(3));
+                        diagnostics.add("call=" + call + " system=" + compact(system)
+                                + " input=" + compact(input) + " response=" + compact(response));
+                        return response;
+                    } catch (RuntimeException error) {
+                        diagnostics.add("call=" + call + " system=" + compact(system)
+                                + " input=" + compact(input) + " error=" + error.getClass().getSimpleName());
+                        throw error;
+                    }
+                });
+        when(chats.findByIdAndPacienteUsuarioAuthId(id, pacienteAuth))
+                .thenReturn(java.util.Optional.of(chat));
+        when(chats.save(any(Chat.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(queue.finalizarTriageEIngresarACola(anyString(), any(), anyString(), any(Chat.class)))
+                .thenReturn(new com.pretriage.backend.controllers.dtos.TiempoEstimadoAtencionResponse());
+        var service = new ChatService(chats, patients, consultations, entries, queue,
+                new TriageIaClient(observedGenerator, mapper), mapper);
+
+        try {
+            service.enviarMensaje(Long.toString(id), pacienteAuth, relato);
+        } catch (RuntimeException | AssertionError error) {
+            fail("caso=" + relato + " repeticion=" + repeticion + " llamadas=" + calls.get()
+                    + " Gemini sintético: " + String.join(" || ", diagnostics), error);
+        }
+
+        String label = "caso=" + relato + " repeticion=" + repeticion
+                + " llamadas=" + calls.get() + " Gemini sintético: " + String.join(" || ", diagnostics);
+        assertTrue(chat.isFinalizado(), label);
+        assertEquals(EstadoClasificacionChat.COMPLETADA, chat.getEstadoClasificacion(), label);
+        assertFalse(chat.isCierreParcial(), label);
+        assertNotNull(chat.getResultadoTriageJson(), label);
+        JsonNode result = mapper.readTree(chat.getResultadoTriageJson());
+        assertFalse(result.path("sintomas").isEmpty(), label);
+        assertFalse(result.path("signosAlarma").isEmpty(), label);
+        assertTrue(result.path("requiereAtencionInmediata").asBoolean(), label);
+        assertTrue(result.path("nivelPrioridad").asInt() >= 4
+                && result.path("nivelPrioridad").asInt() <= 5, label);
+        assertEquals(1, chat.getMensajes().stream()
+                .filter(m -> m.getAutor() == AutorMensaje.PACIENTE).count(), label);
+        assertEquals(2, chat.getMensajes().stream()
+                .filter(m -> m.getAutor() == AutorMensaje.BOT).count(), label);
+        assertEquals(AutorMensaje.BOT, chat.getMensajes().getLast().getAutor(), label);
+        assertTrue(calls.get() <= 4, label + " debe consumir como máximo generación/verificación y una corrección");
+        verify(chats, times(1)).save(chat);
+        verify(queue, times(1)).finalizarTriageEIngresarACola(eq(pacienteAuth), any(), anyString(), same(chat));
+    }
+
+    private String compact(String value) {
+        String normalized = value == null ? "null" : value.replaceAll("\\s+", " ").trim();
+        return normalized.length() <= 900 ? normalized : normalized.substring(0, 900) + "…";
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "No tengo sangrado abundante; tuve un manchado leve una vez."
+    })
+    void verificadorRealNoElevaSangradoLeveANoAfirmadoComoAbundante(String relato) {
+        var harness = clientWithRealVerifier(syntheticClinicalFinal(relato, "sangrado abundante", 5, true));
+
+        var error = assertThrows(ProveedorIaException.class, () -> harness.client().consultar(
+                LenguajeClinicoChat.REGLAS_RESULTADO, conversation(List.of(patient(relato))), true));
+
+        assertTrue(TriageIaClient.esErrorDeRespuesta(error));
+        assertEquals(2, harness.calls().get());
+    }
+
+    @Test
+    void generacionRealNoClasificaHipotesisSinSintomasInformados() {
+        var response = client().consultar(LenguajeClinicoChat.REGLAS_RESULTADO,
+                conversation(List.of(patient("Si llegara a tener sangrado abundante, ¿sería peligroso?"))), true);
+
+        assertFalse(response.finalizado());
+        assertNull(response.resultado());
+        assertTrue(response.estadoEntrada() == EstadoEntradaChat.AMBIGUO
+                || response.estadoEntrada() == EstadoEntradaChat.FUERA_DE_CONTEXTO);
+    }
+
+    @Test
+    void generacionYVerificacionRealesNoTomanSintomaMencionadoSoloPorBot() {
+        String relato = "Me duele la cabeza desde ayer; no tengo sangrado abundante.";
+        String input = conversation(List.of(
+                new TurnoVoz(AutorMensaje.BOT, "¿Tenés sangrado abundante?"), patient(relato)));
+        var harness = clientWithRealVerifier(syntheticClinicalFinal(relato, "sangrado abundante", 5, true));
+
+        var error = assertThrows(ProveedorIaException.class, () -> harness.client().consultar(
+                LenguajeClinicoChat.REGLAS_RESULTADO, input, true));
+
+        assertTrue(TriageIaClient.esErrorDeRespuesta(error));
+        assertEquals(2, harness.calls().get());
     }
 
     @ParameterizedTest
@@ -796,6 +990,26 @@ class ChatHardeningGeminiSmokeTest {
         root.set("evidenciaClinica", mapper.valueToTree(List.of(Map.of(
                 "campo", "sintomas", "valor", symptom,
                 "cita", "me siento triste desde que mi pareja se mudó a otra ciudad"))));
+        return mapper.writeValueAsString(root);
+    }
+
+    private String syntheticClinicalFinal(String quote, String symptom, int priority, boolean alarm) {
+        var root = (ObjectNode) mapper.readTree(emptySymptomsFinalResponse());
+        var result = (ObjectNode) root.path("resultado");
+        result.put("motivoConsulta", symptom);
+        result.putArray("sintomas").add(symptom);
+        var alarms = result.putArray("signosAlarma");
+        if (alarm) alarms.add(symptom);
+        result.put("inicio", "no informado");
+        result.put("observaciones", "");
+        result.put("nivelPrioridad", priority);
+        result.put("requiereAtencionInmediata", alarm);
+        result.put("recomendacionSeguridad", alarm ? "Buscá atención médica de urgencia."
+                : "Consultá con un profesional de salud.");
+        var evidence = new java.util.ArrayList<Map<String, String>>();
+        evidence.add(Map.of("campo", "sintomas", "valor", symptom, "cita", quote));
+        if (alarm) evidence.add(Map.of("campo", "signosAlarma", "valor", symptom, "cita", quote));
+        root.set("evidenciaClinica", mapper.valueToTree(evidence));
         return mapper.writeValueAsString(root);
     }
 
