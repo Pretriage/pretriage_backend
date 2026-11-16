@@ -128,8 +128,18 @@ class ValidadorCierreEntrevistaVozTest {
 
     @Test
     void permiteAlarmaAfirmadaDelPacienteSinEsperarMinimoDeTurnos() {
-        assertTrue(ValidadorCierreEntrevistaVoz.validar(List.of(paciente("Tengo dolor de pecho y dificultad para respirar desde hace diez minutos")), resumen()).isEmpty());
-        assertTrue(ValidadorCierreEntrevistaVoz.validar(List.of(paciente("No tengo alergias, pero tengo dificultad para respirar")), resumen()).isEmpty());
+        var dolorToracicoYDisnea = List.of(paciente(
+                "Tengo dolor de pecho y dificultad para respirar desde hace diez minutos. No quiero seguir respondiendo."));
+        var disnea = List.of(paciente(
+                "No tengo alergias, pero tengo dificultad para respirar desde hoy. No quiero seguir respondiendo."));
+        assertTrue(ValidadorCierreEntrevistaVoz.contieneAlarmaLiteral(dolorToracicoYDisnea));
+        assertTrue(ValidadorCierreEntrevistaVoz.contieneAlarmaLiteral(disnea));
+        assertTrue(ValidadorCierreEntrevistaVoz.validar(dolorToracicoYDisnea,
+                resumenAlarma("dolor de pecho y dificultad para respirar", List.of("dolor de pecho", "falta de aire"),
+                        "desde hace diez minutos", "dolor de pecho; dificultad respiratoria")).isEmpty());
+        assertTrue(ValidadorCierreEntrevistaVoz.validar(disnea,
+                resumenAlarma("dificultad para respirar", List.of("dificultad para respirar"), "desde hoy",
+                        "dificultad respiratoria")).isEmpty());
     }
 
     @Test
@@ -156,10 +166,14 @@ class ValidadorCierreEntrevistaVozTest {
                 "Sí me cuesta respirar", "Sí me cuesta un poco respirar", "Me cuesta bastante respirar",
                 "Me cuesta respirar un poco", "Me cuesta respirar bastante",
                 "Sí tengo falta de aire")) {
-            var turnos = List.of(paciente(relato));
+            var turnos = List.of(paciente(relato + ". No quiero seguir respondiendo."));
             assertTrue(ValidadorCierreEntrevistaVoz.contieneAlarmaLiteral(turnos), relato);
             assertTrue(ValidadorCierreEntrevistaVoz.tieneDatosSuficientes(turnos), relato);
-            assertTrue(ValidadorCierreEntrevistaVoz.validar(turnos, resumen()).isEmpty(), relato);
+            boolean dolorToracico = relato.toLowerCase().contains("dolor de pecho");
+            assertTrue(ValidadorCierreEntrevistaVoz.validar(turnos, resumenAlarma(
+                    dolorToracico ? "dolor de pecho" : "falta de aire",
+                    List.of(dolorToracico ? "dolor de pecho" : "falta de aire"),
+                    "no informado", dolorToracico ? "dolor de pecho" : "dificultad respiratoria")).isEmpty(), relato);
         }
 
         for (String relato : List.of("No me falta un poco el aire", "No sé si me falta un poco el aire",
@@ -193,8 +207,13 @@ class ValidadorCierreEntrevistaVozTest {
 
     @Test
     void permiteAlarmaEspecificaReconocidaPorGeminiFueraDelLexicoLocal() {
-        assertTrue(ValidadorCierreEntrevistaVoz.validar(List.of(paciente("No puedo mover el brazo y la boca esta torcida")), conAlarmas("debilidad unilateral de inicio subito")).isEmpty());
-        assertTrue(ValidadorCierreEntrevistaVoz.validar(List.of(paciente("Estoy desorientado")), conAlarmas("confusion")).isEmpty());
+        var debilidad = List.of(paciente("No puedo mover el brazo y la boca esta torcida. No quiero seguir respondiendo."));
+        var confusion = List.of(paciente("Estoy desorientado. No quiero seguir respondiendo."));
+        assertTrue(ValidadorCierreEntrevistaVoz.validar(debilidad,
+                resumenAlarma("debilidad y desviación de la boca", List.of("debilidad", "boca torcida"),
+                        "no informado", "debilidad unilateral de inicio subito")).isEmpty());
+        assertTrue(ValidadorCierreEntrevistaVoz.validar(confusion,
+                resumenAlarma("desorientación", List.of("desorientación"), "no informado", "confusion")).isEmpty());
     }
 
     @Test
@@ -471,8 +490,12 @@ class ValidadorCierreEntrevistaVozTest {
     }
 
     @Test
-    void alarmaLiteralYRechazoExplicitoSiguenAutorizandoCierreInmediato() {
-        assertTrue(ValidadorCierreEntrevistaVoz.tieneDatosSuficientes(List.of(paciente("Tengo dolor de pecho"))));
+    void alarmaLiteralNoOmiteDatosPendientesPeroRechazoExplicitoSigueAutorizandoCierre() {
+        assertFalse(ValidadorCierreEntrevistaVoz.tieneDatosSuficientes(List.of(paciente("Tengo dolor de pecho"))));
+        assertTrue(ValidadorCierreEntrevistaVoz.tieneDatosSuficientes(List.of(
+                paciente("Tengo dolor de pecho"), bot("¿Desde cuándo empezó?"), paciente("Desde hace una hora"),
+                bot("Del 1 al 10, ¿cuánto te duele?"), paciente("8"),
+                bot("¿Hay algo más que quieras contar?"), paciente("No"))));
         assertTrue(ValidadorCierreEntrevistaVoz.tieneDatosSuficientes(List.of(paciente("Me duele la cabeza"),
                 bot("¿Desde cuándo?"), paciente("No quiero seguir respondiendo"))));
     }
@@ -666,6 +689,10 @@ class ValidadorCierreEntrevistaVozTest {
     private static TurnoVoz paciente(String contenido) { return new TurnoVoz(AutorMensaje.PACIENTE, contenido); }
     private static TurnoVoz bot(String contenido) { return new TurnoVoz(AutorMensaje.BOT, contenido); }
     private static ResumenEntrevistaVoz resumen() { return conAlarmas(); }
+    private static ResumenEntrevistaVoz resumenAlarma(String motivo, List<String> sintomas, String inicio, String alarma) {
+        return new ResumenEntrevistaVoz(motivo, sintomas, inicio, "no informado", null, List.of(alarma),
+                List.of(), List.of(), List.of(), "no informado", "Datos no informados.");
+    }
     private static ResumenEntrevistaVoz conAlarmas(String... signos) {
         return new ResumenEntrevistaVoz("Dolor de cabeza", List.of("dolor de cabeza"), "desde ayer", "sin cambios", 5,
                 List.of(signos), List.of(), List.of(), List.of(), "no informado", "Niega antecedentes, medicamentos y alergias");

@@ -288,6 +288,25 @@ Tampoco las citas ni un segundo modelo constituyen una garantía matemática de
 comprensión médica. Las pruebas sintéticas deben ampliarse con casos de uso reales
 anonimizados y revisión clínica antes de afirmar un nivel de efectividad general.
 
+## Alarmas y entrevista completa
+
+Detectar una alarma afirmada no finaliza por sí solo la entrevista. Texto muestra
+un aviso urgente en la primera respuesta; voz emite `aviso_urgente` una vez por
+sesión. Ambos indican pedir atención sin esperar al chat y continúan únicamente
+con los datos pertinentes que sigan pendientes y la invitación abierta única.
+`hayAlarma()` conserva la detección independientemente de `puedeCerrar()`.
+El verificador de preguntas acepta el objetivo pendiente incluso ante una alarma
+ya avisada; una invitación pertinente no se rechaza por requerir atención urgente.
+Las alarmas sin un objetivo de síntoma ya reconocido conservan objetivos de inicio
+separados por expresión afirmada. Una fecha de otra manifestación no completa ese
+objetivo; las fechas ambiguas quedan pendientes. La negación de una lista se
+mantiene entre comas, mientras una afirmación nueva explícita puede abrir otro dato.
+
+La clasificación final mantiene las citas del paciente, la atención inmediata y
+prioridad 4 o 5 consistente con consulta y cola. Los cierres por solicitud del
+paciente y los límites técnicos existentes siguen disponibles. No se inventan
+valores de inicio, intensidad o evolución para dar los objetivos por respondidos.
+
 ## Verificación reproducible
 
 La suite automática usa proveedores simulados y una base descartable:

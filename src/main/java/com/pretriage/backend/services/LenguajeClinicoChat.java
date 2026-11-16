@@ -9,6 +9,9 @@ import java.util.regex.Pattern;
 public final class LenguajeClinicoChat {
     private LenguajeClinicoChat() {}
 
+    public static final String AVISO_ATENCION_URGENTE =
+            "Buscá atención médica urgente. No esperes a completar el chat ni a recibir un turno para pedir ayuda.";
+
     /** Compatibility alias for the resource budget; closure is decided by ProgresoEntrevista. */
     @Deprecated(forRemoval = false)
     public static final int MAX_RESPUESTAS_PACIENTE =
@@ -103,7 +106,9 @@ public final class LenguajeClinicoChat {
             niega ese dato; "no tengo otros sintomas" evita explorar sintomas nuevos, pero no niega datos de
             cuantificacion aun no preguntados sobre sintomas ya afirmados. No interpretes una negativa como
             prueba de que no hay signos de alarma. Deja lo desconocido como desconocido.
-            Ante una alarma clara, recomienda atencion urgente y cierra sin demoras.
+            Ante una alarma clara, recomienda atencion urgente con claridad y sin demorar esa recomendacion.
+            La persona puede continuar respondiendo las preguntas pertinentes pendientes; no cierres la entrevista
+            solo por la alarma ni sugieras que debe esperar a completarla para pedir ayuda.
             """;
 
     /** The same equivalence boundary governs final generation, correction and verification. */
@@ -126,6 +131,9 @@ public final class LenguajeClinicoChat {
             narrado en pasado no aporta una fecha o duracion: inicio="no informado" y evolucion="no informado"
             son validos sin una referencia temporal o descripcion del cambio expresadas por el paciente.
             Conserva las referencias temporales que si haya afirmado, incluidas las relativas o contextuales.
+            Si dice que no sabe la fecha exacta pero afirma "desde que" ocurrio un hecho, ese inicio relativo
+            si esta informado. No aceptes inicio="no informado" omitiendo esa referencia afirmada, aunque
+            la cita de evidencia contenga la referencia: la cita no sustituye el campo de inicio.
             Una sensacion diferente, una metafora, un termino ambiguo o una negacion no se convierten en un
             sintoma afirmado por parecerse a una etiqueta clinica. Un dato que solo dijo BOT o un resumen
             generado no adquiere respaldo por normalizarlo.

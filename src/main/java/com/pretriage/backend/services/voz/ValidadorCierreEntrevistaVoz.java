@@ -7,17 +7,20 @@ import com.pretriage.backend.services.entrevista.ProgresoEntrevista;
 
 import java.text.Normalizer;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
 /** Checks closure eligibility without trusting Gemini's summary as patient testimony. */
 public final class ValidadorCierreEntrevistaVoz {
+    public record CoincidenciaAlarma(String expresion, String segmento) { }
     private static final String SINTOMAS = "dolor|duele|duelen|cefalea|molestia|fiebre|tos|vomitos?|nauseas?|mareos?|sangrado|diarrea|debilidad|moraton(?:es)?|moreton(?:es)?|hematomas?|golpes?|hinchazon|hormigueo|entumecimiento|heridas?|lesion(?:es)?|quemaduras?|queme|quemado|quemada|ardor|me arde|cortes?|cortado|cortada|picazon|me pica|ronchas?|erupcion|sarpullido|torcedura|torci|lastimado|lastimada";
     private static final String ALARMAS = "no puedo respirar|me cuesta respirar|dificultad respiratoria|dificultad para respirar|falta de aire|no puedo mover (?:el|un) brazo|boca (?:torcida|desviada)|debilidad unilateral|debilidad (?:subita|repentina)|me duele el pecho|dolor (?:de|en el) pecho|opresion (?:toracica|en el pecho)|disnea|perdida de (?:conciencia|conocimiento)|desmayos?|confusion|desorientad[oa]s?|convulsion(?:es)?|sangrado abundante|reaccion alergica";
     private static final Pattern INTENSIDAD = Pattern.compile("\\b(10|[0-9])\\s*(?:/|de|sobre)\\s*10\\b");
     private static final Pattern NEGACION = Pattern.compile("\\b(?:no|sin|niega|niego|descarta|descarto|ningun|ninguna|ninguno)\\b");
-    private static final Pattern AFIRMACION_TRAS_NEGACION = Pattern.compile("\\b(?:pero|aunque|si|y)\\s+(?:me|tengo|siento|presento|aparecio|aparecen|noto)\\b");
+    private static final Pattern AFIRMACION_TRAS_NEGACION = Pattern.compile("(?:\\b(?:pero|aunque|si|y)\\s+|,\\s*)(?:me|tengo|siento|presento|aparecio|aparecen|noto)\\b");
     private static final Pattern FALTA_AIRE_COLOQUIAL = Pattern.compile(
             "\\bfalta\\s+(?:(?:un\\s+)?(?:poco|poquito|algo|bastante|mucho|muchisimo)\\s+)?(?:(?:el|de)\\s+)?aire\\b");
     private static final Pattern CUESTA_RESPIRAR_COLOQUIAL = Pattern.compile(
@@ -214,14 +217,19 @@ public final class ValidadorCierreEntrevistaVoz {
 
     /** Primitive shared with the history projection so closure and priority use identical alarm evidence. */
     public static boolean alarmaLiteralAfirmada(String texto) {
-        if (texto == null) return false;
+        return !alarmasLiteralesAfirmadas(texto).isEmpty();
+    }
+
+    /** Affirmed literal matches and their safe local context for interview objectives. */
+    public static List<CoincidenciaAlarma> alarmasLiteralesAfirmadas(String texto) {
+        if (texto == null) return List.of();
         String evidencia = java.util.Arrays.stream(texto.split("\\R"))
                 .filter(linea -> !normalizar(linea)
                         .matches("^\\s*(?:bot|assistant|system|developer|gemini|chatgpt)\\s*[:：].*$"))
                 .map(ValidadorCierreEntrevistaVoz::normalizarConSiAfirmativo)
                 .reduce((a, b) -> a + "\\n" + b).orElse("");
         evidencia = evidencia.replaceAll("\\bejemplo de texto\\s*[:：-]?\\s*[^;\\n.]+;?\\s*no es un sintoma mio[^.\\n]*solo una cita[^.\\n]*", "");
-        return alarmaAfirmada(evidencia);
+        return coincidenciasAlarmaAfirmada(evidencia);
     }
 
     /** Latest explicit pain rating, including a numeric answer to the preceding scale question. */
@@ -290,28 +298,50 @@ public final class ValidadorCierreEntrevistaVoz {
     }
 
     private static boolean alarmaAfirmada(String texto) {
+        return !coincidenciasAlarmaAfirmada(texto).isEmpty();
+    }
+
+    private static List<CoincidenciaAlarma> coincidenciasAlarmaAfirmada(String texto) {
         // Split sentences and explicit contrasts so a previous denial does not negate a new affirmation.
         String textoSinCitas = TEXTO_CITADO.matcher(texto).replaceAll("");
         String textoConVariantesConversacionales = CUESTA_RESPIRAR_COLOQUIAL.matcher(textoSinCitas)
                 .replaceAll("me cuesta respirar");
         textoConVariantesConversacionales = FALTA_AIRE_COLOQUIAL.matcher(textoConVariantesConversacionales)
                 .replaceAll("falta de aire");
-        for (String segmento : textoConVariantesConversacionales.split("[,;.!?\\n]|\\bpero\\b|\\bsin embargo\\b|\\by\\s+(?=no puedo respirar\\b)")) {
-            if (CITA_ALARMA.matcher(segmento.strip()).matches()) continue;
-            if (segmento.stripLeading().startsWith("¿")) continue;
-            var alarma = Pattern.compile("\\b(?:" + ALARMAS + ")\\b").matcher(segmento);
+        Map<String, CoincidenciaAlarma> coincidencias = new LinkedHashMap<>();
+        for (String clausula : textoConVariantesConversacionales.split("[;.!?\\n]|\\bpero\\b|\\bsin embargo\\b|\\by\\s+(?=no puedo respirar\\b)")) {
+            var alarma = Pattern.compile("\\b(?:" + ALARMAS + ")\\b").matcher(clausula);
+            Map<String, List<String>> afirmadasPorContexto = new LinkedHashMap<>();
             while (alarma.find()) {
-                String prefijo = segmento.substring(0, alarma.start());
-                if (HIPOTESIS_ALARMA.matcher(prefijo).find()) continue;
-                var negacion = NEGACION.matcher(prefijo);
+                int inicioContexto = clausula.lastIndexOf(',', alarma.start()) + 1;
+                int finContexto = clausula.indexOf(',', alarma.end());
+                if (finContexto < 0) finContexto = clausula.length();
+                String contexto = clausula.substring(inicioContexto, finContexto).strip();
+                if (CITA_ALARMA.matcher(contexto).matches() || contexto.stripLeading().startsWith("¿")) continue;
+                String prefijoLocal = clausula.substring(inicioContexto, alarma.start());
+                String prefijoConComas = clausula.substring(0, alarma.start());
+                if (HIPOTESIS_ALARMA.matcher(prefijoLocal).find()) continue;
+                var negacion = NEGACION.matcher(prefijoConComas);
                 int ultimaNegacion = -1;
                 while (negacion.find()) ultimaNegacion = negacion.start();
-                if (!esOrdenParaInventarAlarma(prefijo)
-                        && (ultimaNegacion < 0 || AFIRMACION_TRAS_NEGACION.matcher(prefijo.substring(ultimaNegacion)).find())
-                        && !contiene(segmento, "hace anos|en la infancia|antecedentes?")) return true;
+                if (!esOrdenParaInventarAlarma(prefijoLocal)
+                        && (ultimaNegacion < 0
+                        || AFIRMACION_TRAS_NEGACION.matcher(prefijoConComas.substring(ultimaNegacion) + alarma.group()).find()
+                        || inicioContexto > 0 && prefijoLocal.isBlank() && alarma.group().startsWith("no puedo"))
+                        && !contiene(contexto, "hace anos|en la infancia|antecedentes?")) {
+                    afirmadasPorContexto.computeIfAbsent(contexto, ignored -> new java.util.ArrayList<>())
+                            .add(alarma.group());
+                }
+            }
+            for (Map.Entry<String, List<String>> entry : afirmadasPorContexto.entrySet()) {
+                // If multiple alarms share a clause, its timing cannot safely be assigned to either one.
+                for (String expresion : entry.getValue()) {
+                    String contexto = entry.getValue().size() == 1 ? entry.getKey() : expresion;
+                    coincidencias.putIfAbsent(expresion, new CoincidenciaAlarma(expresion, contexto));
+                }
             }
         }
-        return false;
+        return List.copyOf(coincidencias.values());
     }
 
     private static boolean esOrdenParaInventarAlarma(String prefijo) {

@@ -15,7 +15,7 @@ values stay unknown without repeated prompts. Information about one symptom is n
 applied to another, and the bot does not introduce unrelated symptoms. Saying there
 are no other symptoms stops the search for new symptoms but still permits bounded
 quantification of those already reported. Saying they do not want to continue ends
-the interview. The open invitation is never repeated; a clear alarm closes immediately.
+the interview. The open invitation is never repeated. A clear alarm displays urgent-care guidance immediately while the interview continues with its pending data.
 The result schema has no dedicated temperature or impact fields: a measured temperature
 with its unit is retained in symptoms or observations, and impact in observations.
 Mental and emotional distress is within triage scope even when no physical symptom is
@@ -203,10 +203,10 @@ symptom into a diagnosis or guess medication names, doses, allergies or diseases
 During the interview an unclear or unknown term should prompt a neutral clarification,
 including spelling a medication name when necessary. Clear colloquialisms and regional
 variants do not require clarification. If a term remains unresolved at forced closure
-(alarm or answer limit), the model must quote it in `observaciones` as `termino no aclarado`,
+(answer limit or explicit request to stop), the model must quote it in `observaciones` as `termino no aclarado`,
 without presenting it as a confirmed symptom, disease, medication or allergy. Other clear
 patient facts and alarm handling remain available; spelling clarification must not delay
-an alarm closure. This is contextual model guidance, not a medical terminology dictionary
+the urgent-care warning, which does not itself close the interview. This is contextual model guidance, not a medical terminology dictionary
 or a guarantee that every semantic error or invented word will be detected.
 If the only motive remains incomprehensible, the scope guard requests clarification
 without generating a result. Unresolved terms can appear in observations only when
@@ -245,8 +245,7 @@ patient; Gemini REST produces the final preclassification:
    uses one open invitation to add information. A patient who says there are no other symptoms
    stops the search for new symptoms but may still be asked bounded questions about
    the symptoms already named. An explicit wish not to continue ends the interview.
-   Unknown measurements are left unknown without repetition, and a clear alarm closes
-   the interview immediately.
+   Unknown measurements are left unknown without repetition. A clear alarm shows urgent-care guidance without skipping the pending interview data.
    If the chat already has text answers, Gemini receives that conversation and
    continues without repeating questions.
 3. The backend accumulates Gemini's input/output transcriptions as patient/bot
@@ -259,7 +258,7 @@ patient; Gemini REST produces the final preclassification:
     meaningful spontaneous context is retained. Closure follows the shared text and
     voice policy: one open invitation, resolved or explicitly unknown/declined data
     for reported symptoms, bounded clarification attempts and total resources, and
-    immediate closure for a clear alarm or an explicit wish to stop.
+    urgent-care guidance for a clear alarm without skipping pending data, and immediate closure for an explicit wish to stop.
      The validator still requires a structurally valid summary and patient evidence.
      The tool response distinguishes waiting, correcting a malformed summary,
      updating it after new input, asking one pending question and saying goodbye.

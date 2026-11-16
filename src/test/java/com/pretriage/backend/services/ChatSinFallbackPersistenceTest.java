@@ -163,6 +163,7 @@ class ChatSinFallbackPersistenceTest {
 
     @Test
     void textoTransitorioReservaDosIntentosYRecuperaSinRepetirTurno() throws Exception {
+        prepararCierrePorDolor();
         var resultado = new TriageResultDTO("dolor de pecho", List.of("dolor de pecho"), "no informado",
                 "no informado", null, List.of("dolor toracico"), List.of(), List.of(), List.of(),
                 "no informado", "no informado", 4, true, "Acudir a guardia");
@@ -178,7 +179,7 @@ class ChatSinFallbackPersistenceTest {
             return new TriageAiResponse(true, "Gracias", resultado);
         });
 
-        var aceptado = chatService.enviarMensaje(chatId, pacienteAuth, "Tengo dolor de pecho");
+        var aceptado = chatService.enviarMensaje(chatId, pacienteAuth, "No, nada más.");
         assertEquals("PROCESAMIENTO_PENDIENTE", aceptado.origenRespuesta());
         assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.PENDIENTE,
                 chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion());
@@ -199,7 +200,7 @@ class ChatSinFallbackPersistenceTest {
                 && System.nanoTime() < deadline) Thread.sleep(20);
         assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.COMPLETADA,
                 chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion());
-        assertEquals(1, db.queryForObject("SELECT count(*) FROM mensaje WHERE chat_id=? AND autor='PACIENTE'",
+        assertEquals(4, db.queryForObject("SELECT count(*) FROM mensaje WHERE chat_id=? AND autor='PACIENTE'",
                 Integer.class, Long.valueOf(chatId)));
         verify(proveedor, times(2)).consultar(anyString(), anyString(), eq(true));
         verify(cola, times(1)).finalizarTriageEIngresarACola(anyString(), any(), anyString(), any());
@@ -207,13 +208,14 @@ class ChatSinFallbackPersistenceTest {
 
     @Test
     void falloTextoEnCierreQuedaPendienteYRecuperaSinDuplicarMensajeNiCola() throws Exception {
+        prepararCierrePorDolor();
         when(proveedor.consultar(anyString(), anyString(), eq(true)))
                 .thenThrow(new ProveedorIaException(new IllegalStateException("invalid response"),
                         ProveedorIaException.Categoria.VALIDACION_RESPUESTA))
                 .thenReturn(new TriageAiResponse(true, "Gracias",
                 new TriageResultDTO("dolor de pecho", List.of("dolor de pecho"), "no informado", "no informado", null,
                         List.of("dolor toracico"), List.of(), List.of(), List.of(), "no informado", "no informado", 4, true, "Acudir a guardia")));
-        var aceptado = chatService.enviarMensaje(chatId, pacienteAuth, "Tengo dolor de pecho");
+        var aceptado = chatService.enviarMensaje(chatId, pacienteAuth, "No, nada más.");
         assertEquals("PROCESAMIENTO_PENDIENTE", aceptado.origenRespuesta());
         assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.PENDIENTE,
                 chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion());
@@ -225,9 +227,21 @@ class ChatSinFallbackPersistenceTest {
                 && System.nanoTime() < deadline) Thread.sleep(20);
         assertEquals(com.pretriage.backend.model.chat.EstadoClasificacionChat.COMPLETADA,
                 chatService.obtenerChat(chatId, pacienteAuth).estadoClasificacion());
-        assertEquals(1, db.queryForObject("SELECT count(*) FROM mensaje WHERE chat_id=? AND autor='PACIENTE'", Integer.class, Long.valueOf(chatId)));
+        assertEquals(4, db.queryForObject("SELECT count(*) FROM mensaje WHERE chat_id=? AND autor='PACIENTE'", Integer.class, Long.valueOf(chatId)));
         verify(proveedor, times(2)).consultar(anyString(), anyString(), eq(true));
         verify(cola, times(1)).finalizarTriageEIngresarACola(eq(pacienteAuth), any(), anyString(), any());
+    }
+
+    private void prepararCierrePorDolor() {
+        when(proveedor.consultarContinuacion(anyString(), anyString(), any())).thenReturn(
+                new TriageAiResponse(false, "¿Desde cuándo empezó el dolor de pecho?", null),
+                new TriageAiResponse(false, "Del 1 al 10, ¿qué intensidad tiene el dolor?", null),
+                new TriageAiResponse(false, "¿Hay algo más que quieras contar sobre lo que te pasa?", null));
+        chatService.enviarMensaje(chatId, pacienteAuth, "Tengo dolor de pecho");
+        chatService.enviarMensaje(chatId, pacienteAuth, "Hace una hora");
+        chatService.enviarMensaje(chatId, pacienteAuth, "7/10");
+        assertFalse(chatService.obtenerChat(chatId, pacienteAuth).finalizado());
+        clearInvocations(proveedor);
     }
 
     @Test
