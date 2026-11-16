@@ -95,9 +95,10 @@ public class ChatService {
             Asigna nivelPrioridad entero: 5 riesgo vital inmediato, 4 muy urgente, 3 urgente,
             2 normal, 1 no urgente.
             Incluye una recomendacionSeguridad breve para evaluacion presencial o emergencias
-            segun el caso, sin indicar tratamientos.
+            segun el caso, sin indicar tratamientos. Redactala de forma cordial, como una sola recomendacion,
+            sin repetir el mismo aviso con otras palabras. Conserva la urgencia respaldada por los datos.
             mensaje es un cierre breve para el paciente: "Gracias. Ya registré tus respuestas para el
-            equipo médico." Si hay una alarma, indica tambien que busque atencion urgente.
+            equipo médico." No repitas en mensaje la orientacion que ya va en recomendacionSeguridad.
             """ + LenguajeClinicoChat.REGLAS_RESULTADO;
 
     private static final String FINAL_SYSTEM_PROMPT_VOZ = FINAL_SYSTEM_PROMPT + """
@@ -969,10 +970,9 @@ public class ChatService {
         }
         if (resultadoConPrioridad != null && resultadoConPrioridad.requiereAtencionInmediata()
                 && resultadoConPrioridad.recomendacionSeguridad() != null
-                && !resultadoConPrioridad.recomendacionSeguridad().isBlank()
-                && !normalizarTexto(contenidoRespuesta)
-                .contains(normalizarTexto(resultadoConPrioridad.recomendacionSeguridad()))) {
-            contenidoRespuesta += " " + resultadoConPrioridad.recomendacionSeguridad().trim();
+                && !resultadoConPrioridad.recomendacionSeguridad().isBlank()) {
+            contenidoRespuesta = LenguajeClinicoChat.CIERRE_REGISTRO_ENTREVISTA + " "
+                    + resultadoConPrioridad.recomendacionSeguridad().trim();
         }
         Mensaje mensajeBot = new Mensaje(contenidoRespuesta, AutorMensaje.BOT, null);
         chat.agregarMensaje(mensajeBot);

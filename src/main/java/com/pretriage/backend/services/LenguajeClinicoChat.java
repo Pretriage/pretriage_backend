@@ -9,6 +9,9 @@ import java.util.regex.Pattern;
 public final class LenguajeClinicoChat {
     private LenguajeClinicoChat() {}
 
+    public static final String CIERRE_REGISTRO_ENTREVISTA =
+            "Gracias. Ya registré tus respuestas para el equipo médico.";
+
     public static final String AVISO_ATENCION_URGENTE =
             "Buscá atención médica urgente. No esperes a completar el chat ni a recibir un turno para pedir ayuda.";
 
@@ -143,9 +146,13 @@ public final class LenguajeClinicoChat {
             Comunicacion con el paciente:
             En mensaje y recomendacionSeguridad no menciones la preclasificacion,
             clasificacion, triage ni el calculo o nivel de prioridad: esa informacion es para el equipo medico.
-            No prometas mostrar resultados en pantalla. Si hay un resultado clínico, agradece y confirma
-            que registraste sus respuestas para el equipo medico. Mantene los avisos de atencion urgente
-            si hay signos de alarma.
+            No prometas mostrar resultados en pantalla. Si hay un resultado clinico, mensaje contiene solo
+            el agradecimiento y la confirmacion de registro para el equipo medico. La orientacion de seguridad
+            va solamente en recomendacionSeguridad: una recomendacion breve y cordial, sin repetirla ni
+            acumular expresiones como "urgente", "de inmediato" y "cuanto antes" para decir lo mismo.
+            Usa tono de sugerencia, como "Por lo que nos contaste, te recomendamos...", conservando la
+            atencion urgente o emergencias cuando corresponda. Una alarma afirmada no se condiciona a
+            sentirse peor o muy mal; no reduzcas su urgencia para suavizar el tono.
             Completa normalmente los campos internos del JSON de clasificación.
 
             Normalizacion del lenguaje clinico:

@@ -513,7 +513,9 @@ result or queue-priority update.
 Existing
 historical chat results may still contain `FALLBACK_LOCAL` or `OLLAMA`.
 For a final result requiring immediate attention, `respuesta.contenido` includes
-the structured `recomendacionSeguridad` so the urgent advice is visible in chat.
+the fixed registration acknowledgement and a single copy of the structured
+`recomendacionSeguridad`. The model's closing message is not concatenated with it.
+The structured recommendation and clinical priority are preserved.
 
 Intermediate question-only responses contain no clinical result. In structured
 results, `observaciones` may be an empty string when no additional

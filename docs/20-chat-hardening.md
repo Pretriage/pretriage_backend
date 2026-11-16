@@ -290,6 +290,12 @@ anonimizados y revisión clínica antes de afirmar un nivel de efectividad gener
 
 ## Alarmas y entrevista completa
 
+El cierre urgente visible combina el acuse fijo de registro y una sola copia de la
+`recomendacionSeguridad` validada. No concatena una segunda paráfrasis de `mensaje`.
+La recomendación usa un tono cordial de sugerencia, conservando la urgencia y sin
+condicionarla a que la persona se sienta peor. El resultado clínico y su prioridad
+no se modifican para ajustar el texto.
+
 Detectar una alarma afirmada no finaliza por sí solo la entrevista. Texto muestra
 un aviso urgente en la primera respuesta; voz emite `aviso_urgente` una vez por
 sesión. Ambos indican pedir atención sin esperar al chat y continúan únicamente
